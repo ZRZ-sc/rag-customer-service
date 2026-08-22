@@ -1,0 +1,37 @@
+# ---- Web framework ----
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+python-dotenv>=1.0
+orjson>=3.10
+
+# ---- AI / LangChain (LLM interface + LCEL) ----
+langchain-core>=0.3,<0.4
+langchain-openai>=0.2,<0.4
+langchain-text-splitters>=0.3,<0.4
+langsmith>=0.2
+
+# ---- Local models (CPU) ----
+sentence-transformers>=3.3
+FlagEmbedding>=1.3
+
+# ---- Vector DB ----
+pymilvus>=2.5,<3.0
+
+# ---- Databases ----
+asyncpg>=0.30
+redis>=5.2
+
+# ---- Search / utils ----
+rank-bm25>=0.2.2
+httpx>=0.28
+numpy>=1.26
+
+# ---- Observability ----
+loguru>=0.7
+prometheus-client>=0.21
+
+# ---- Testing ----
+pytest>=8.3
+pytest-asyncio>=0.24
