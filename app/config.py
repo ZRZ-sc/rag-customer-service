@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # ---- 认证 ----
     api_token: str = "dev-token-change-me"
+    auth_debug_log: bool = False           # 排查用：打印真实收到的 Authorization 头（明文，仅调试期开启）
 
     # ---- RAG 参数 ----
     cache_enabled: bool = True

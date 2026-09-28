@@ -1,4 +1,8 @@
-"""Milvus 向量库客户端：Collection 管理、写入、检索。"""
+"""Milvus 向量库客户端：Collection 管理、写入、检索。
+
+自愈：Milvus 重启后旧的 gRPC channel 会失效，此后所有操作都失败。
+探测失败即丢弃客户端（reset），下次取用自动重建。
+"""
 from pymilvus import DataType, MilvusClient
 
 from app.config import settings
@@ -11,6 +15,17 @@ def get_client() -> MilvusClient:
     if _client is None:
         _client = MilvusClient(uri=settings.milvus_uri)
     return _client
+
+
+def reset() -> None:
+    """丢弃缓存的客户端（连接失效时调用，下次 get_client() 重建）。"""
+    global _client
+    if _client is not None:
+        try:
+            _client.close()
+        except Exception:
+            pass
+        _client = None
 
 
 def ensure_collection(dim: int | None = None) -> None:
@@ -74,4 +89,5 @@ async def ping() -> bool:
         get_client().list_collections()
         return True
     except Exception:
+        reset()          # 连接失效 → 丢弃客户端，下次请求重建（自愈）
         return False

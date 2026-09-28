@@ -1,4 +1,8 @@
-"""Redis 异步客户端（缓存 + 会话存储）。"""
+"""Redis 异步客户端（缓存 + 会话存储）。
+
+自愈：Redis 重启或网络中断后，客户端内部连接池可能全部失效。探测失败时丢弃客户端，
+下次取用自动重建（缓存/会话本身允许丢失，不影响主流程）。
+"""
 from redis import asyncio as aioredis
 
 from app.config import settings
@@ -14,6 +18,8 @@ def get_redis() -> aioredis.Redis:
             decode_responses=True,
             socket_connect_timeout=2,
             socket_timeout=3,
+            health_check_interval=30,
+            retry_on_timeout=True,
         )
     return _client
 
@@ -21,7 +27,10 @@ def get_redis() -> aioredis.Redis:
 async def close_redis() -> None:
     global _client
     if _client is not None:
-        await _client.aclose()
+        try:
+            await _client.aclose()
+        except Exception:
+            pass
         _client = None
 
 
@@ -29,4 +38,5 @@ async def ping() -> bool:
     try:
         return bool(await get_redis().ping())
     except Exception:
+        await close_redis()
         return False

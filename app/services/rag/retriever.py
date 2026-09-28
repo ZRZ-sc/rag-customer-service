@@ -2,6 +2,7 @@
 import asyncio
 import re
 import threading
+import time
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -36,10 +37,25 @@ class HybridRetriever:
         self._bm25: BM25Okapi | None = None
         self._id2idx: dict[int, int] = {}
         self._lock = threading.Lock()
+        self._last_load_attempt: float = 0.0
+        self._load_retry_interval: float = 30.0
 
     @property
     def ready(self) -> bool:
         return self._bm25 is not None
+
+    async def ensure_loaded(self) -> None:
+        """自愈：启动时 PostgreSQL 不可用会导致语料为空，这里按冷却时间自动重试加载。"""
+        if self.ready:
+            return
+        now = time.monotonic()
+        if now - self._last_load_attempt < self._load_retry_interval:
+            return
+        self._last_load_attempt = now
+        try:
+            await self.load()
+        except Exception:
+            pass
 
     async def load(self) -> int:
         """从 PostgreSQL 加载已发布 FAQ 并构建 BM25 索引（启动时 + 知识库更新时调用）。"""
@@ -121,6 +137,7 @@ class HybridRetriever:
 
     async def hybrid_search(self, query: str, top_k: int = 50) -> list[dict]:
         """BM25 与向量检索并行执行，RRF 融合。"""
+        await self.ensure_loaded()      # 语料为空时按冷却时间自动重载（自愈）
         bm25_res, vec_res = await asyncio.gather(
             asyncio.to_thread(self.bm25_search, query, top_k),
             self.vector_search(query, top_k),
