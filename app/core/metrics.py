@@ -49,6 +49,16 @@ context_rewrite_duration = Histogram(
     buckets=[0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
 )
 
+# ---- 多级缓存（阶段3） ----
+cache_operation_total = Counter(
+    "cache_operation_total", "缓存操作次数", ["name", "result"]
+)
+
+# ---- RAG 快速路径 ----
+rag_fast_path_total = Counter(
+    "rag_fast_path_total", "RAG 快速路径命中次数", ["result"]
+)
+
 
 def metrics_response() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

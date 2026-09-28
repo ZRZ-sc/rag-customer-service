@@ -25,7 +25,7 @@ from app.services import cache as cache_svc
 from app.services import conversation as conv_svc
 from app.services import precise_query
 from app.services.intent import classify
-from app.services.query_rewrite import rewrite_query
+from app.services.query_rewrite import is_standalone, rewrite_query
 from app.services.rag.pipeline import LOW_CONFIDENCE_ANSWER, run_rag
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -44,6 +44,32 @@ async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatRespons
     source = "rag"
     status = "ok"
     try:
+        # ---- L1 快速探测：独立问题（无代词/省略）的改写结果就是原问题本身，
+        #      因此可直接用原问题查答案缓存，省去历史/实体读取与改写流程（~5ms 命中）
+        if is_standalone(req.question):
+            early = await cache_svc.get_cached_answer(
+                cache_svc.answer_cache_key(req.question)
+            )
+            if early:
+                data = ChatData(
+                    answer=early["answer"],
+                    source="rag",
+                    confidence=early["confidence"],
+                    session_id=req.session_id,
+                    tokens_used=early.get("tokens_used", 0),
+                    latency_ms=0,
+                )
+                await conv_svc.add_turns(
+                    session_id, [("user", req.question), ("assistant", data.answer)]
+                )
+                latency_ms = int((time.perf_counter() - t0) * 1000)
+                data.latency_ms = latency_ms
+                data.intent = "knowledge"
+                chat_duration_seconds.observe(latency_ms / 1000.0)
+                await _log_dialogue(req, "knowledge", data, latency_ms, {"cache": {"answer": "hit"}})
+                logger.info("L1 answer cache HIT (early probe) latency_ms={}", latency_ms)
+                return ChatResponse(data=data)
+
         history = await conv_svc.get_history(session_id)
         last_entities = await conv_svc.get_last_entities(session_id)
 
@@ -71,9 +97,10 @@ async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatRespons
             rag_query_total.inc()
             data, retrieval = await _handle_knowledge(req, history, user_id, effective_question)
 
-        # ---- 多轮会话记录（保留用户原始表述，实体记忆另行维护） ----
-        await conv_svc.add_turn(session_id, "user", req.question)
-        await conv_svc.add_turn(session_id, "assistant", data.answer)
+        # ---- 多轮会话记录（保留用户原始表述，实体记忆另行维护；批量写入省 2 次往返） ----
+        await conv_svc.add_turns(
+            session_id, [("user", req.question), ("assistant", data.answer)]
+        )
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         data.latency_ms = latency_ms
@@ -173,6 +200,13 @@ async def _handle_knowledge(
         )
 
     res = await run_rag(question, history, req.session_id, user_id)
+    # 阶段耗时 / 路径 / 缓存命中情况随日志落库，便于延迟分析与后续管理后台展示
+    detail = {
+        "sources": res.sources,
+        "stage_ms": {k: round(v, 1) for k, v in res.stage_ms.items()},
+        "cache": res.cache,
+        "path": res.path,
+    }
     if res.confidence < settings.confidence_threshold:
         # 低置信度：不缓存，直接兜底话术（转人工入口由前端/后续扩展承接）
         return (
@@ -184,7 +218,7 @@ async def _handle_knowledge(
                 tokens_used=res.tokens_used,
                 latency_ms=0,
             ),
-            res.sources,
+            detail,
         )
 
     await cache_svc.set_cached_answer(
@@ -195,7 +229,10 @@ async def _handle_knowledge(
             "tokens_used": res.tokens_used,
         },
     )
-    logger.info("rag ok confidence={:.3f} stages={}", res.confidence, res.stage_ms)
+    logger.info(
+        "rag ok path={} confidence={:.3f} cache={} stages={}",
+        res.path, res.confidence, res.cache, res.stage_ms,
+    )
     return (
         ChatData(
             answer=res.answer,
@@ -205,7 +242,7 @@ async def _handle_knowledge(
             tokens_used=res.tokens_used,
             latency_ms=0,
         ),
-        res.sources,
+        detail,
     )
 
 

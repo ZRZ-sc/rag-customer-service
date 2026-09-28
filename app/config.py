@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     hyde_enabled: bool = True              # 是否启用 HyDE
     confidence_threshold: float = 0.5      # RAG Top-1 低于该值转人工/兜底
 
+    # ---- 缓存优化（阶段3） ----
+    rewrite_cache_ttl_seconds: int = 86400    # 上下文改写结果缓存 24h（省一次 LLM 调用）
+    transform_cache_ttl_seconds: int = 86400  # Multi-Query/HyDE 扩展缓存 24h（省一次 LLM 调用）
+    rerank_cache_ttl_seconds: int = 86400     # Rerank 结果缓存 24h（知识库变更时主动失效）
+    rerank_max_candidates: int = 12           # 送入 Cross-Encoder 的候选上限（CPU 重排开销控制）
+
+    # ---- 快速路径（高置信直出，CPU 机器上把首答压到 2s 内） ----
+    fast_path_enabled: bool = True
+    fast_path_min_score: float = 0.80         # top1 向量余弦相似度阈值
+    fast_path_min_margin: float = 0.05        # top1 与 top2 的最小分差
+    fast_path_rerank_topk: int = 5            # 快速路径下送重排的候选数
+
     # ---- 会话 ----
     session_ttl_seconds: int = 1800        # 会话 30 分钟过期
     session_max_turns: int = 10            # 最多保留 10 轮

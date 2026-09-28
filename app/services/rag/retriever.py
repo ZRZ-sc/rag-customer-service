@@ -128,10 +128,20 @@ class HybridRetriever:
                 )
                 entry["rrf_score"] += 1.0 / (RRF_K + rank + 1)
                 entry["methods"].add(item.get("method", "?"))
+                # 保留向量原始相似度：快速路径判定（高置信直出）需要它
+                if item.get("method") == "vector":
+                    entry["vector_score"] = max(
+                        entry.get("vector_score", 0.0), float(item.get("score", 0.0))
+                    )
         merged = sorted(fused.values(), key=lambda x: x["rrf_score"], reverse=True)[:top_k]
         for m in merged:
             m["methods"] = sorted(m["methods"])
         return merged
+
+    @staticmethod
+    def vector_scores(hits: list[dict]) -> list[float]:
+        """提取命中结果中的向量相似度（无向量命中记 0）。"""
+        return [float(h.get("vector_score", 0.0)) for h in hits]
 
     # ---- 组合检索 ----
 

@@ -90,6 +90,27 @@ async def set_last_entities(session_id: str, entities: dict) -> None:
         pass
 
 
+async def add_turns(session_id: str, turns: list[tuple[str, str]]) -> list[dict]:
+    """批量追加多轮对话（1 次 GET + 1 次 SET，优于多次调用 add_turn）。"""
+    r = get_redis()
+    key = _key(session_id)
+    try:
+        raw = await r.get(key)
+        history = json.loads(raw) if raw else []
+    except Exception:
+        history = []
+    for role, content in turns:
+        history.append({"role": role, "content": content})
+    history = history[-settings.session_max_turns:]
+    try:
+        await r.set(
+            key, json.dumps(history, ensure_ascii=False), ex=settings.session_ttl_seconds
+        )
+    except Exception:
+        pass
+    return history
+
+
 async def clear(session_id: str) -> None:
     try:
         await get_redis().delete(_key(session_id), _entity_key(session_id))

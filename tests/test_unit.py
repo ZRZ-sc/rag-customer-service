@@ -6,6 +6,7 @@ from app.services.query_rewrite import (
     _parse_rewrite,
     _rewrite_with_memory,
     _strip_injected_entities,
+    is_standalone,
     needs_rewrite,
     rewrite_query,
 )
@@ -25,6 +26,21 @@ class _FakeLLM:
 
     async def ainvoke(self, _messages):
         return await self._handler()
+
+
+@pytest.fixture
+def no_rewrite_cache(monkeypatch):
+    """隔离真实 Redis：改写相关单测默认不读写缓存。"""
+    from app.services import cache as cache_module
+
+    async def _none(*args, **kwargs):
+        return None
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(cache_module, "get_json", _none)
+    monkeypatch.setattr(cache_module, "set_json", _noop)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +146,7 @@ def test_rewrite_with_memory():
     assert _rewrite_with_memory("到哪了", {"order_ids": [], "tracking_nos": []}) is None
 
 
-async def test_rewrite_query_falls_back_to_memory_without_llm(monkeypatch):
+async def test_rewrite_query_falls_back_to_memory_without_llm(monkeypatch, no_rewrite_cache):
     """LLM 不可用时，仍应通过会话实体记忆完成指代消解（降级路径）。"""
 
     async def _boom():
@@ -143,7 +159,7 @@ async def test_rewrite_query_falls_back_to_memory_without_llm(monkeypatch):
     assert "ORD20240100001" in res["rewritten"]
 
 
-async def test_rewrite_query_llm_path(monkeypatch):
+async def test_rewrite_query_llm_path(monkeypatch, no_rewrite_cache):
     async def _ok():
         return _FakeMsg('{"rewritten": "订单 ORD20240100001 什么时候能到？", "used_context": true}')
 
@@ -152,6 +168,29 @@ async def test_rewrite_query_llm_path(monkeypatch):
     assert res["applied"] is True
     assert res["method"] == "llm"
     assert res["rewritten"].startswith("订单 ORD20240100001")
+
+
+async def test_rewrite_query_cache_hit_skips_llm(monkeypatch):
+    """改写缓存命中时不得再调用 LLM。"""
+
+    async def _hit(key, name="json"):
+        return {"rewritten": "订单 ORD20240100001 什么时候能到？", "method": "llm"}
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    def _boom():
+        raise AssertionError("缓存命中时不应调用 LLM")
+
+    from app.services import cache as cache_module
+
+    monkeypatch.setattr(cache_module, "get_json", _hit)
+    monkeypatch.setattr(cache_module, "set_json", _noop)
+    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_boom))
+    res = await rewrite_query("那什么时候能到？", _HISTORY, _MEMORY)
+    assert res["cached"] is True
+    assert res["applied"] is True
+    assert "ORD20240100001" in res["rewritten"]
 
 
 async def test_rewrite_query_noop_for_standalone_question():
@@ -203,7 +242,7 @@ async def test_classify_status_question_still_precise():
     assert res["method"] == "regex"
 
 
-async def test_rewrite_guard_strips_entity_for_policy_question(monkeypatch):
+async def test_rewrite_guard_strips_entity_for_policy_question(monkeypatch, no_rewrite_cache):
     """LLM 给政策类问题注入了订单号 → 护栏必须剥离，避免误路由到数据库。"""
 
     async def _ok():
@@ -217,3 +256,116 @@ async def test_rewrite_guard_strips_entity_for_policy_question(monkeypatch):
     assert res["method"] == "llm+policy_guard"
     assert "ORD20240100001" not in res["rewritten"]
     assert "运费" in res["rewritten"]
+
+
+# ---- 阶段3：多级缓存与快速路径 ----
+
+
+def test_cache_key_formats():
+    from app.services import cache as cache_svc
+
+    assert cache_svc.answer_cache_key("  退货  政策 ").startswith("rag:answer:")
+    assert cache_svc.rewrite_cache_key("那什么时候能到？", "fp").startswith("query_rewrite:")
+    assert cache_svc.transform_cache_key("退货政策").startswith("query_transform:")
+    assert cache_svc.rerank_cache_key("退货政策", [1, 2]).startswith("rerank:")
+
+
+def test_answer_cache_key_normalized():
+    """大小写/多余空格归一化后应命中同一个键。"""
+    from app.services import cache as cache_svc
+
+    assert cache_svc.answer_cache_key("退货  Policy") == cache_svc.answer_cache_key("  退货 policy  ")
+
+
+def test_rerank_cache_key_order_insensitive_but_content_sensitive():
+    from app.services import cache as cache_svc
+
+    # 候选集合相同（顺序无关）→ 同一个键
+    assert cache_svc.rerank_cache_key("q", [3, 1, 2]) == cache_svc.rerank_cache_key("q", [2, 3, 1])
+    # 候选集合变化 → 不同键（知识库变更后自然失效）
+    assert cache_svc.rerank_cache_key("q", [1, 2]) != cache_svc.rerank_cache_key("q", [1, 2, 3])
+    # 问题变化 → 不同键
+    assert cache_svc.rerank_cache_key("q1", [1, 2]) != cache_svc.rerank_cache_key("q2", [1, 2])
+
+
+def test_rewrite_cache_key_includes_context_fingerprint():
+    """同一句话在不同上下文（不同订单）下必须产生不同缓存键，防止跨会话串味。"""
+    from app.services import cache as cache_svc
+
+    k1 = cache_svc.rewrite_cache_key("那什么时候能到？", "ORD20240100001||前文A")
+    k2 = cache_svc.rewrite_cache_key("那什么时候能到？", "ORD20240100002||前文A")
+    assert k1 != k2
+
+
+@pytest.mark.parametrize(
+    "question, expected",
+    [
+        ("七天无理由退货的条件是什么？", True),
+        ("怎么开具发票？", True),
+        ("那什么时候能到？", False),
+        ("它到哪了", False),
+        ("什么时候能到？", False),
+        ("发货了吗", False),
+    ],
+)
+def test_is_standalone(question, expected):
+    """独立问题可跳过历史读取直接探测 L1 缓存；追问类不行。"""
+    assert is_standalone(question) is expected
+
+
+def test_fast_path_eligibility():
+    from app.services.rag import pipeline
+
+    cands = [{"faq_id": i} for i in (1, 2, 3)]
+    # 高相似度且分差明显 → 走快速路径
+    assert pipeline._fast_path_eligible(
+        [{"faq_id": 1, "vector_score": 0.92}, {"faq_id": 2, "vector_score": 0.70},
+         {"faq_id": 3, "vector_score": 0.60}],
+        cands,
+    ) is True
+    # 分差不足 → 走完整路径
+    assert pipeline._fast_path_eligible(
+        [{"faq_id": 1, "vector_score": 0.90}, {"faq_id": 2, "vector_score": 0.88},
+         {"faq_id": 3, "vector_score": 0.60}],
+        cands,
+    ) is False
+    # 相似度不足 → 走完整路径
+    assert pipeline._fast_path_eligible(
+        [{"faq_id": 1, "vector_score": 0.55}, {"faq_id": 2, "vector_score": 0.20},
+         {"faq_id": 3, "vector_score": 0.10}],
+        cands,
+    ) is False
+    # 候选过少 → 走完整路径
+    assert pipeline._fast_path_eligible([{"faq_id": 1, "vector_score": 0.95}], [{"faq_id": 1}]) is False
+
+
+async def test_rerank_cache_hit_reconstructs_ranking(monkeypatch):
+    """命中重排缓存时，应按缓存的分数重建排序，且不调用 CPU 重排。"""
+    from app.services.rag import pipeline
+
+    cached = {"scores": {"1": 0.90, "2": 0.30, "3": 0.55}}
+    called = {"rerank": 0}
+
+    async def fake_get(key, name="json"):
+        return cached
+
+    async def fake_set(*args, **kwargs):
+        return None
+
+    def fake_rerank(*args, **kwargs):
+        called["rerank"] += 1
+        return []
+
+    monkeypatch.setattr(pipeline.cache_svc, "get_json", fake_get)
+    monkeypatch.setattr(pipeline.cache_svc, "set_json", fake_set)
+    monkeypatch.setattr(pipeline.reranker, "rerank", fake_rerank)
+
+    cands = [
+        {"faq_id": 1, "question": "q1", "answer": "a1"},
+        {"faq_id": 2, "question": "q2", "answer": "a2"},
+        {"faq_id": 3, "question": "q3", "answer": "a3"},
+    ]
+    ranked, flag = await pipeline._rerank_with_cache("q", cands, top_k=2)
+    assert flag == "hit"
+    assert called["rerank"] == 0
+    assert [c["faq_id"] for c in ranked] == [1, 3]

@@ -18,8 +18,10 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.config import settings
 from app.core.logging import logger
 from app.core.metrics import context_rewrite_total, context_rewrite_duration
+from app.services import cache as cache_svc
 from app.services.intent import (
     ORDER_ID_RE,
     TRACKING_RE,
@@ -33,9 +35,10 @@ from app.services.llm import get_llm
 _PRONOUN_RE = re.compile(
     r"(^那|它|这个|那个|这单|那单|该订单|该单|此单|上述|上面|刚才|之前|^还有|^另外|^再)"
 )
-# 极简追问："呢？""多久？""为什么？""还要多久？"
+# 极简追问："呢？""什么时候？""多久？""为什么？""还要多久？"
+# 注意：不要把"怎么/如何"列入——"怎么开具发票？"是完整独立问题，而非省略主语的追问
 _SHORT_FOLLOWUP_RE = re.compile(
-    r"^(呢|那呢|什么时候|多久|还要|要多久|多少钱|为什么|怎么|如何|能不能|可以吗)"
+    r"^(呢|那呢|什么时候|多久|还要|要多久|多少钱|为什么|几点|多长|几天)"
 )
 
 _REWRITE_SYSTEM_PROMPT = """你是多轮对话的查询改写助手。任务：把用户当前问题改写为**不依赖上下文即可独立理解**的问题。
@@ -50,6 +53,26 @@ _REWRITE_SYSTEM_PROMPT = """你是多轮对话的查询改写助手。任务：�
 5. 若当前问题本身已经完整独立，原样返回。
 
 只输出 JSON：{"rewritten": "改写后的问题", "used_context": true}"""
+
+
+def is_standalone(question: str) -> bool:
+    """是否为独立问题（不含代词/省略标记）。
+
+    用途：独立问题的"改写后问题"就是原问题本身，因此可以直接用原问题做答案缓存探测，
+    命中时无需读取会话历史/实体记忆，也无需进入改写流程（L1 命中延迟降到个位数毫秒）。
+    """
+    q = (question or "").strip()
+    if not q:
+        return False
+    if _PRONOUN_RE.search(q):
+        return False
+    if len(q) <= 12 and _SHORT_FOLLOWUP_RE.match(q):
+        return False
+    if len(q) <= 12 and (
+        q.endswith("呢") or q.endswith("呢？") or q.endswith("吗") or q.endswith("吗？")
+    ):
+        return False
+    return True
 
 
 def needs_rewrite(question: str, history: list[dict], last_entities: dict) -> bool:
@@ -123,21 +146,54 @@ def _strip_injected_entities(text: str) -> str:
     return cleaned or text
 
 
+def _context_fingerprint(history: list[dict], last_entities: dict) -> str:
+    """上下文指纹：会话实体 + 上一轮用户问题，用于保证改写缓存不跨上下文串味。"""
+    last_user = ""
+    for turn in reversed(history):
+        if turn.get("role") == "user":
+            last_user = (turn.get("content") or "").strip()[:60]
+            break
+    orders = ",".join(last_entities.get("order_ids") or [])
+    trackings = ",".join(last_entities.get("tracking_nos") or [])
+    return f"{orders}|{trackings}|{last_user}"
+
+
 async def rewrite_query(
     question: str,
     history: list[dict] | None = None,
     last_entities: dict | None = None,
 ) -> dict:
-    """上下文改写入口。
+    """上下文改写入口（结果缓存 24h，避免重复的 LLM 改写调用）。
 
-    返回：{"original": str, "rewritten": str, "applied": bool, "method": "none|llm|entity_memory|llm+entity_memory"}
+    返回：{"original": str, "rewritten": str, "applied": bool,
+           "method": "none|llm|entity_memory|llm+entity_memory|llm+policy_guard", "cached": bool}
     """
     history = history or []
     last_entities = last_entities or {"order_ids": [], "tracking_nos": []}
-    result = {"original": question, "rewritten": question, "applied": False, "method": "none"}
+    result = {
+        "original": question,
+        "rewritten": question,
+        "applied": False,
+        "method": "none",
+        "cached": False,
+    }
 
     if not needs_rewrite(question, history, last_entities):
         context_rewrite_total.labels(applied="false", method="none").inc()
+        return result
+
+    cache_key = cache_svc.rewrite_cache_key(
+        question, _context_fingerprint(history, last_entities)
+    )
+    cached = await cache_svc.get_json(cache_key, name="query_rewrite")
+    if cached and cached.get("rewritten"):
+        context_rewrite_total.labels(applied="true", method=f"{cached.get('method', 'cache')}+cache").inc()
+        result.update(
+            rewritten=cached["rewritten"], applied=True, method=cached.get("method", "llm"), cached=True
+        )
+        logger.info(
+            "query rewrite cache HIT | original={!r} -> rewritten={!r}", question, cached["rewritten"]
+        )
         return result
 
     t0 = time.perf_counter()
@@ -199,6 +255,16 @@ async def rewrite_query(
     context_rewrite_duration.observe(time.perf_counter() - t0)
     context_rewrite_total.labels(applied="true", method=method).inc()
     result.update(rewritten=rewritten, applied=True, method=method)
+
+    # 写入缓存（TTL 24h）：method=cache 的命中不再触发 LLM
+    if method not in ("entity_memory",):  # 实体记忆兜底本身零成本，无需缓存
+        await cache_svc.set_json(
+            cache_key,
+            {"rewritten": rewritten, "method": method},
+            ttl=settings.rewrite_cache_ttl_seconds,
+            name="query_rewrite",
+        )
+
     logger.info(
         "query rewritten | original={!r} -> rewritten={!r} method={}", question, rewritten, method
     )

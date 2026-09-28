@@ -52,7 +52,10 @@ async def ingest_file(path: str, category: str | None) -> None:
 
     cleared = await invalidate_knowledge_cache()
     print(f"[ok] ingested {len(items)} docs -> faq_ids={faq_ids}")
-    print(f"[ok] milvus upserted, knowledge cache cleared: {cleared} keys")
+    print(
+        "[ok] milvus upserted, cache cleared: "
+        f"answer={cleared['answer']} transform={cleared['transform']} rerank={cleared['rerank']}"
+    )
     print("[!] 提示：如需应用内 BM25 索引立即刷新，请重启服务（或后续调用管理接口）")
 
 
@@ -62,8 +65,9 @@ async def delete_faq(faq_ids: list[int]) -> None:
         "UPDATE faq_documents SET status='archived' WHERE id = ANY($1::int[])", faq_ids
     )
     milvus.delete_by_faq_ids(faq_ids)
-    await invalidate_knowledge_cache()
+    cleared = await invalidate_knowledge_cache()
     print(f"[ok] archived faq_ids={faq_ids} and removed from milvus")
+    print(f"[ok] cache cleared: answer={cleared['answer']} transform={cleared['transform']} rerank={cleared['rerank']}")
 
 
 async def main() -> None:
