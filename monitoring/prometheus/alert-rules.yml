@@ -1,0 +1,68 @@
+# 告警规则（需求文档 N8：核心依赖故障/服务劣化需可被发现）
+# 说明：当前未接入 Alertmanager，规则在 Prometheus UI 的 Alerts 页面可见。
+groups:
+  - name: rag-api-availability
+    rules:
+      - alert: RagServiceDown
+        expr: up{job="rag-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "问答服务不可达"
+          description: "Prometheus 已连续 2 分钟抓取不到 /metrics（{{ $labels.instance }}）"
+
+      - alert: RagHighErrorRate
+        expr: |
+          sum(rate(chat_requests_total{status="error"}[5m]))
+          / clamp_min(sum(rate(chat_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "问答接口错误率 > 5%"
+          description: "近 5 分钟错误率 {{ $value | humanizePercentage }}"
+
+      - alert: RagHighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(chat_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "问答 P99 延迟 > 2s"
+          description: "近 10 分钟 P99 = {{ $value }}s（缓存失效或依赖劣化时触发）"
+
+  - name: rag-api-degradation
+    rules:
+      - alert: RagCacheHitRateLow
+        expr: |
+          sum(rate(cache_hits_total[10m]))
+          / clamp_min(sum(rate(cache_hits_total[10m])) + sum(rate(cache_misses_total[10m])), 0.001) < 0.3
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "答案缓存命中率 < 30%"
+          description: "当前命中率 {{ $value | humanizePercentage }}，检查知识库是否刚更新或流量是否为全新问句"
+
+      - alert: RagFastPathRatioLow
+        expr: |
+          sum(rate(rag_fast_path_total{result="fast"}[10m]))
+          / clamp_min(sum(rate(rag_fast_path_total[10m])), 0.001) < 0.2
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "快速路径占比 < 20%"
+          description: "大量问题落入完整路径（LLM 扩展 + 全量重排），延迟会显著升高"
+
+      - alert: RagDegradedResponses
+        expr: rate(chat_requests_total{status="error"}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "服务错误速率升高"
+          description: "近 5 分钟错误速率 {{ $value }}/s，请检查 PostgreSQL / Milvus / DeepSeek 依赖"

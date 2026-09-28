@@ -1,0 +1,10 @@
+[
+  {
+    "targets": ["172.28.112.1:8000"],
+    "labels": {
+      "service": "rag-customer-service",
+      "host": "windows-host",
+      "env": "local"
+    }
+  }
+]

@@ -1,0 +1,33 @@
+# Prometheus 配置：抓取 FastAPI /metrics（需求文档 3.6 节）
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: rag-local
+    service: rag-customer-service
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+scrape_configs:
+  # ---- FastAPI 应用指标 ----
+  # 目标地址由 scripts/monitoring_up.ps1 自动探测（WSL 默认网关 = Windows 宿主机）后写入
+  # targets/windows-host.json，Prometheus 通过 file_sd_configs 热加载，无需重启或改本文件。
+  - job_name: rag-api
+    metrics_path: /metrics
+    scheme: http
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/*.json
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: job
+        replacement: rag-api
+
+  # ---- Prometheus 自身 ----
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

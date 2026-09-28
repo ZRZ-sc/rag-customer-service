@@ -18,7 +18,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import settings
 from app.core.logging import logger
-from app.core.metrics import rag_fast_path_total, tokens_consumed_total
+from app.core.metrics import (
+    llm_generation_duration,
+    query_transform_duration,
+    rag_fast_path_total,
+    rag_retrieval_duration,
+    rerank_duration,
+    tokens_consumed_total,
+)
 from app.services import cache as cache_svc
 from app.services.llm import extract_usage, get_llm
 from app.services.rag.query_transform import transform_queries
@@ -119,6 +126,7 @@ async def run_rag(
         degraded = True
         hits = await hybrid_retriever.fallback_fulltext(question, top_k=settings.top_k_final)
         stage["retrieval_ms"] = (time.perf_counter() - t) * 1000
+        rag_retrieval_duration.observe(stage["retrieval_ms"] / 1000.0)
         if not hits:
             return RagResult(
                 answer=LOW_CONFIDENCE_ANSWER, confidence=0.0, stage_ms=stage,
@@ -128,8 +136,10 @@ async def run_rag(
         return await _generate(question, hits, confidence, stage, degraded, "fallback", cache_flags)
 
     base_candidates = hybrid_retriever.attach_docs(base_hits)
-    stage["base_retrieval_ms"] = (time.perf_counter() - t) * 1000
-    stage["retrieval_ms"] = stage["base_retrieval_ms"]
+    base_retrieval_ms = (time.perf_counter() - t) * 1000
+    rag_retrieval_duration.observe(base_retrieval_ms / 1000.0)
+    stage["base_retrieval_ms"] = base_retrieval_ms
+    stage["retrieval_ms"] = base_retrieval_ms
 
     # ---- 2. 路径选择 ----
     if _fast_path_eligible(base_hits, base_candidates):
@@ -146,6 +156,7 @@ async def run_rag(
         )
         cache_flags["rerank"] = rerank_cache
         stage["rerank_ms"] = (time.perf_counter() - t) * 1000
+        rerank_duration.observe(stage["rerank_ms"] / 1000.0)
     else:
         path = "full"
         rag_fast_path_total.labels(result="full").inc()
@@ -159,6 +170,7 @@ async def run_rag(
         )
         search_queries = [q for q in search_queries if q]
         stage["query_transform_ms"] = (time.perf_counter() - t) * 1000
+        query_transform_duration.observe(stage["query_transform_ms"] / 1000.0)
 
         # ---- 4. 多查询混合检索（各查询并行 + RRF 融合） ----
         t = time.perf_counter()
@@ -170,7 +182,9 @@ async def run_rag(
             logger.warning("multi-query retrieval degraded to PG fulltext: {}", exc)
             degraded = True
             hits = await hybrid_retriever.fallback_fulltext(question, top_k=settings.top_k_final)
-        stage["retrieval_ms"] += (time.perf_counter() - t) * 1000
+        multi_retrieval_ms = (time.perf_counter() - t) * 1000
+        rag_retrieval_duration.observe(multi_retrieval_ms / 1000.0)
+        stage["retrieval_ms"] += multi_retrieval_ms
 
         candidates = hybrid_retriever.attach_docs(hits)
         if not candidates:
@@ -186,6 +200,7 @@ async def run_rag(
         )
         cache_flags["rerank"] = rerank_cache
         stage["rerank_ms"] = (time.perf_counter() - t) * 1000
+        rerank_duration.observe(stage["rerank_ms"] / 1000.0)
 
     if not ranked:
         return RagResult(
@@ -219,6 +234,7 @@ async def _generate(
     )
     usage = extract_usage(resp)
     stage["llm_ms"] = (time.perf_counter() - t) * 1000
+    llm_generation_duration.observe(stage["llm_ms"] / 1000.0)
     stage["total_ms"] = sum(stage.get(k, 0.0) for k in ("query_transform_ms", "retrieval_ms", "rerank_ms", "llm_ms"))
 
     if usage["total_tokens"]:

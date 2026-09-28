@@ -1,0 +1,16 @@
+# Grafana 数据源自动配置：指向同网络的 Prometheus 容器
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+      prometheusType: Prometheus
+      prometheusVersion: 2.54.1

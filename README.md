@@ -23,35 +23,44 @@
 ```
 app/
 ├── main.py                  # FastAPI 入口（lifespan、中间件、异常处理）
-├── config.py                # pydantic-settings 配置（.env）
+├── config.py                # pydantic-settings 配置（.env / .env.local）
 ├── api/
-│   ├── deps.py              # Bearer Token 认证
+│   ├── deps.py              # HTTPBearer 认证（Swagger Authorize 可用）
 │   └── routes/              # chat / health
-├── core/                    # 错误码、结构化日志、Prometheus 指标
-├── db/                      # PostgreSQL(asyncpg) / Redis / Milvus 客户端
+├── core/                    # 错误码、结构化日志(UTF-8 JSON)、Prometheus 指标
+├── db/                      # PostgreSQL(asyncpg) / Redis / Milvus 客户端（含自愈）
 ├── models/                  # 请求/响应 Pydantic 模型
 └── services/
     ├── llm.py               # DeepSeek 客户端
-    ├── embeddings.py        # bge 本地向量化
-    ├── intent.py            # 意图识别：正则 → 关键词 → LLM few-shot
+    ├── embeddings.py        # bge 本地向量化（含启动预热）
+    ├── intent.py            # 意图识别：政策优先 → 正则 → 关键词 → LLM few-shot
+    ├── query_rewrite.py     # 多轮指代消解（LLM 改写 + 实体记忆兜底 + 政策护栏，24h 缓存）
     ├── precise_query.py     # 精确查询（含归属校验）
-    ├── cache.py             # Redis 答案缓存
-    ├── conversation.py      # 多轮会话（Redis，30 分钟过期）
-    └── rag/                 # query_transform / retriever / reranker / pipeline
+    ├── cache.py             # 四级缓存：答案 / 改写 / 扩展 / 重排
+    ├── conversation.py      # 多轮会话 + 会话实体记忆（Redis，30 分钟过期）
+    └── rag/                 # query_transform / retriever / reranker / pipeline（快速路径）
 scripts/
 ├── init_db.py               # 建表 + 种子数据（用户/商品/订单）
 ├── ingest_kb.py             # FAQ → PG → 向量化 → Milvus → 清缓存
-└── download_models.py       # 预下载本地模型
-data/faq/sample_faq.json     # 43 条示例 FAQ
-tests/                       # 单元测试
+├── download_models_modelscope.py  # 从 ModelScope 预下载本地模型
+├── infra_up.ps1             # 基础设施启停（含 WSL 保活）
+├── monitoring_up.ps1        # 监控栈启停（自动写入抓取目标）
+├── latency_test.py          # 延迟测试（冷启动 / 各级缓存命中对比）
+└── traffic_demo.py          # 流量演示（点亮 Grafana 仪表盘）
+monitoring/
+├── prometheus/              # prometheus.yml、alert-rules.yml、targets/
+└── grafana/                 # 数据源与仪表盘自动配置 + rag-overview.json
+data/faq/sample_faq.json     # 42 条示例 FAQ
+tests/                       # 单元测试（48 个）
 docker-compose.infra.yml     # Milvus + PG + Redis 基础设施
+docker-compose.monitoring.yml# Prometheus + Grafana 监控栈
 ```
 
 ## 快速开始
 
 ### 0. 前置条件
 
-- Python 3.12+，Docker Desktop 运行中
+- Python 3.12+，Docker 可用（本机环境：Docker 引擎运行于 WSL Ubuntu，见「环境适配」）
 - DeepSeek API Key（填入 `.env` 的 `DEEPSEEK_API_KEY`）
 
 ### 1. 安装依赖
@@ -60,31 +69,39 @@ docker-compose.infra.yml     # Milvus + PG + Redis 基础设施
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe scripts\download_models.py   # 预下载嵌入/重排模型（约 2-3GB）
+.\.venv\Scripts\python.exe scripts\download_models_modelscope.py   # 预下载嵌入/重排模型（ModelScope 源）
 ```
 
 ### 2. 启动基础设施
 
 ```powershell
-docker compose -f docker-compose.infra.yml up -d
-# 等待 milvus healthy（首次拉镜像较慢）
-docker compose -f docker-compose.infra.yml ps
+powershell -ExecutionPolicy Bypass -File scripts\infra_up.ps1 -Keepalive   # 一键启动（含 WSL 保活，窗口需保持打开）
+# 等价手动方式：
+# docker compose -f docker-compose.infra.yml up -d
 ```
 
 ### 3. 初始化数据
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\init_db.py                     # 建表 + 订单/用户种子数据
-.\.venv\Scripts\python.exe scripts\ingest_kb.py --file data\faq\sample_faq.json  # FAQ 导入向量库
+.\.venv\Scripts\python.exe -m scripts.init_db                     # 建表 + 订单/用户种子数据
+.\.venv\Scripts\python.exe -m scripts.ingest_kb --file data\faq\sample_faq.json  # FAQ 导入向量库
 ```
 
 ### 4. 启动服务
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 或开发模式（改动自动重载）：加上 --reload
 ```
 
-### 5. 调用
+### 5. （可选）启动监控栈
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
+# Prometheus http://localhost:9090    Grafana http://localhost:3000 (admin / admin123)
+```
+
+### 6. 调用
 
 ```powershell
 # 健康检查
@@ -103,19 +120,57 @@ curl -X POST http://localhost:8000/api/v1/chat -H "Authorization: Bearer dev-tok
 curl http://localhost:8000/metrics
 ```
 
+## 可观测性（Prometheus + Grafana）
+
+```powershell
+# 一键启动监控栈（自动探测 WSL 网关 = Windows 宿主机 IP 作为抓取目标）
+powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
+```
+
+| 服务 | 地址 | 账号 |
+|------|------|------|
+| Prometheus | http://localhost:9090 | 无（抓取状态：`/targets`） |
+| Grafana | http://localhost:3000 | **admin / admin123** |
+
+- 仪表盘：Grafana → Dashboards → 文件夹「RAG 智能客服」→ **RAG 智能客服 - 总览**（含 QPS、P99 延迟、错误率、缓存命中率、快速路径占比、各环节耗时、Token 消耗等 13 个面板）
+- 抓取目标：`/metrics`（FastAPI 在 Windows 宿主机，Prometheus 容器经 WSL 网关访问；IP 变化时重跑脚本即可，无需改配置）
+- 告警规则：6 条（服务不可达 / 错误率 / P99 / 缓存命中率 / 快速路径占比 / 错误速率）
+
+### 在 Swagger 里触发请求查看监控数据
+
+1. 打开 http://localhost:8000/docs → 右上角 **Authorize** 🔒 → 填 `dev-token-change-me`（不带 `Bearer` 前缀）
+2. 展开 **POST /api/v1/chat** → **Try it out** → 依次执行下面 4 组（每组间隔几秒，方便看到曲线）：
+
+| 目的 | 请求体 | 观察的面板 |
+|------|--------|-----------|
+| 精确查询（走数据库） | `{"session_id":"m1","question":"我的订单 ORD20240100001 到哪里了？","user_id":"user_001"}` | QPS 按来源 → database |
+| 知识类新问题（RAG） | `{"session_id":"m1","question":"退货运费谁出？","user_id":"user_001"}` | QPS 按来源 → rag、各环节耗时 |
+| 同问题重复问（缓存） | 再执行上面同一请求 | 答案缓存命中率 ↑、P99 ↓ |
+| 多轮追问（指代消解） | `{"session_id":"m1","question":"那什么时候能到？","user_id":"user_001"}` | 多轮上下文改写面板 |
+
+3. 等待 15-30 秒（Prometheus 抓取间隔 15s），在 Grafana 把时间范围设为 **Last 5 minutes**，刷新周期 10s
+4. 也可用命令行批量造流量：`.\.venv\Scripts\python.exe -m scripts.traffic_demo --rounds 20 --concurrency 4`
+
+> 注意：监控栈与主服务相互独立。主服务停止时 Prometheus 目标会变为 down，会触发 `RagServiceDown` 告警。
+
 ## 核心流程
 
 ```
 用户问题
-  ├─ 意图识别（正则快路径 → 关键词 → LLM few-shot）
-  │    ├─ 精确查询 → PostgreSQL（归属校验，30s 短缓存）→ 实时答案
-  │    └─ 知识类 → Redis 缓存命中？→ 是：直接返回
-  │                              └─ 否：Multi-Query + HyDE（并行）
-  │                                    → 混合检索(BM25∥向量, RRF 融合)
-  │                                    → bge-reranker 精排 Top-5
-  │                                    → DeepSeek 生成 → 写缓存(TTL 1h)
-  └─ 响应（含 confidence / latency / tokens）
+  ├─ L1 快速探测（独立问题直接查答案缓存）→ 命中：<10ms 返回
+  ├─ 多轮上下文改写（指代消解）：代词/省略 + 会话实体记忆 → 独立完整问题（L2 缓存 24h）
+  ├─ 意图识别（政策标记优先 → 正则快路径 → 关键词 → LLM few-shot）
+  │    ├─ 精确查询 → PostgreSQL（归属校验 403，30s 短缓存）→ 实时答案
+  │    └─ 知识类 → 基础混合检索（BM25∥向量，RRF 融合）
+  │           ├─ 高置信（顶1向量分 ≥0.80 且分差 ≥0.05）→【快速路径】重排 Top-5 → 生成
+  │           └─ 否则 →【完整路径】
+  │                 Multi-Query + HyDE（一次 LLM 调用，L3 缓存 24h）
+  │                 → 多查询混合检索 → Rerank（L4 缓存 24h）→ DeepSeek 生成
+  └─ 响应（含 answer / source / confidence / latency / tokens / intent / rewritten_question）
 ```
+
+**四级缓存**：`rag:answer:` (1h) → `query_rewrite:` (24h) → `query_transform:` (24h) → `rerank:` (24h)
+知识库更新（`ingest_kb.py`）会主动清除答案 / 扩展 / 重排三级缓存。
 
 ## 降级策略
 
@@ -129,14 +184,41 @@ curl http://localhost:8000/metrics
 ## 验证测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest                      # 单元测试（48 个）
+.\.venv\Scripts\python.exe -m scripts.latency_test        # 延迟测试（冷启动/缓存命中对比）
+.\.venv\Scripts\python.exe -m scripts.traffic_demo        # 流量演示（点亮监控面板）
 ```
+
+## 性能现状（本机：i7-12650H CPU / 16GB，无 GPU）
+
+| 场景 | 服务端延迟 | 说明 |
+|------|-----------|------|
+| L1 答案缓存命中 | 2-7ms | 独立问题走快速探测 |
+| 缓存复用（L2/L3/L4 命中） | 550-890ms | 仅剩 DeepSeek 生成耗时 |
+| 冷启动（快速路径） | 0.76-1.35s | 高置信直出，跳过 LLM 扩展 |
+| 冷启动（完整路径） | 2.2-2.9s | LLM 扩展 ~1.0s + CPU 重排 ~0.85s |
+
+> 需求文档的 P99<500ms 依赖 GPU 重排与 vLLM 本地推理；本机组合下缓存是最有效的杠杆。
+
+## 环境适配（本机特有，换机时请对照调整）
+
+| 问题 | 现象 | 处理 |
+|------|------|------|
+| Docker Desktop 不可用 | GUI 卡在 "Remaining Processes" 对话框，引擎起不来 | 改为在 **WSL Ubuntu 内安装 Docker 29 + Compose**，用 `scripts\infra_up.ps1` 管理 |
+| docker.io 被墙 | 拉镜像 `i/o timeout` | dockerd 配置镜像加速 `/etc/docker/daemon.json` → `https://dockerproxy.net` |
+| WSL VM 被回收 | 无活跃会话约 1 分钟后 VM 关闭，容器随之停止 | 脚本 `-Keepalive` 前台常驻；容器均设 `restart: unless-stopped` |
+| HuggingFace 被墙 | 模型下载超时 | 改用 **ModelScope** 源（`scripts\download_models_modelscope.py`），模型落 `models/` 本地目录 |
+| `.env` 受沙箱写保护 | 代理无法修改含密钥文件 | 引入 **`.env.local` 覆盖层**（`config.py` 中 `env_file=(".env", ".env.local")`，后者优先） |
+| 16GB 内存装不下 v2-m3 重排模型 | 加载 2.27GB fp32 权重时 `torch_cpu.dll` 崩溃 | 换 **bge-reranker-base + int8 动态量化**（~700MB），CPU 上快 2-3 倍 |
+| 监控栈抓取 Windows 上的服务 | 容器内 `localhost:8000` 不通 | Prometheus 抓 **WSL 网关 IP**（`scripts\monitoring_up.ps1` 自动探测并写入 file_sd 目标） |
+| Windows 控制台 GBK | JSON 日志含 emoji 抛 `UnicodeEncodeError` 被静默丢弃 | `setup_logging()` 强制 stdout/stderr 转 UTF-8 |
+| 受限沙箱无命名管道 | loguru `enqueue=True` 导致启动失败 | 去掉 `enqueue`（单进程无需异步日志队列） |
 
 ## Roadmap（后续阶段）
 
 - [x] 阶段1：核心问答链路（意图路由 + 精确查询 + 混合检索 RAG + DeepSeek）
-- [ ] 阶段2：可观测性完善（Prometheus/Grafana 面板、LangSmith 追踪、request_id 全链路）
-- [ ] 阶段3：缓存命中率优化 + 多轮会话强化
-- [ ] 阶段4：降级演练与容灾脚本
-- [ ] 阶段5：知识库管理 API（管理后台）
-- [ ] 阶段6：Docker Compose 全栈一键部署（含 app/nginx/prometheus/grafana）
+- [x] 阶段2：多轮对话上下文改写（指代消解 + 实体记忆 + 政策护栏）
+- [x] 阶段3：四级缓存优化 + RAG 快速路径（缓存复用 <1s）
+- [x] 阶段4：可观测性集成（Prometheus + Grafana 13 面板 + 6 条告警规则）
+- [ ] 阶段5：降级演练与容灾脚本 + 知识库管理 API（管理后台）
+- [ ] 阶段6：Docker Compose 全栈一键部署（含 app/nginx 容器化）

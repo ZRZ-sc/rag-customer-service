@@ -1,0 +1,15 @@
+# Grafana 仪表盘自动加载：容器启动即导入 dashboards/ 下的 JSON
+apiVersion: 1
+
+providers:
+  - name: rag-dashboards
+    orgId: 1
+    folder: "RAG 智能客服"
+    folderUid: rag-folder
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

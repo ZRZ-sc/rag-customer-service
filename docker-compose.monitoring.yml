@@ -1,0 +1,72 @@
+# 可观测性栈：Prometheus（指标采集）+ Grafana（可视化）
+#
+# 用法：
+#   powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1          # 一键启动（自动探测宿主机 IP）
+#   docker compose -f docker-compose.monitoring.yml up -d                       # 手动启动
+#   docker compose -f docker-compose.monitoring.yml down                        # 停止
+#
+# 访问：
+#   Prometheus  http://localhost:9090
+#   Grafana     http://localhost:3000   （默认 admin / admin123）
+#
+# 说明：Docker 引擎运行于 WSL Ubuntu，而 FastAPI 运行在 Windows 宿主机上，
+#       因此抓取目标使用 WSL 默认网关 IP（由 scripts/monitoring_up.ps1 自动探测并写入
+#       monitoring/prometheus/targets/windows-host.json，Prometheus 通过 file_sd 热加载）。
+services:
+  prometheus:
+    container_name: rag-prometheus
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    user: root
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - ./monitoring/prometheus/targets:/etc/prometheus/targets:ro
+      - ./volumes/prometheus:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-monitoring
+
+  grafana:
+    container_name: rag-grafana
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/rag-overview.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./volumes/grafana:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-monitoring
+
+networks:
+  rag-monitoring:
+    driver: bridge
