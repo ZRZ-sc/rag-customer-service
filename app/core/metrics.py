@@ -39,6 +39,16 @@ tokens_consumed_total = Counter("tokens_consumed_total", "Token消耗总量", ["
 precision_query_total = Counter("precision_query_total", "精确查询次数")
 rag_query_total = Counter("rag_query_total", "RAG检索查询次数")
 
+# ---- 多轮查询改写（指代消解） ----
+context_rewrite_total = Counter(
+    "context_rewrite_total", "多轮上下文改写次数", ["applied", "method"]
+)
+context_rewrite_duration = Histogram(
+    "context_rewrite_duration_seconds",
+    "多轮上下文改写耗时",
+    buckets=[0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
+)
+
 
 def metrics_response() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

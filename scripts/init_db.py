@@ -64,6 +64,8 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS idx_orders_tracking ON orders(tracking_no)",
     "CREATE INDEX IF NOT EXISTS idx_faq_status ON faq_documents(status)",
     "CREATE INDEX IF NOT EXISTS idx_logs_session ON dialogue_logs(session_id)",
+    # 多轮指代消解：记录改写后的问题（幂等迁移，旧库直接补列）
+    "ALTER TABLE dialogue_logs ADD COLUMN IF NOT EXISTS rewritten_question TEXT",
 ]
 
 USERS = [

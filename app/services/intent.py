@@ -20,12 +20,26 @@ PRECISE_KEYWORDS = [
     "到哪", "进度", "查询", "退款到", "退货退款状态",
 ]
 
+# 政策/规则类标记：命中时**优先**判为知识类，即使问题里带了订单号。
+# 例："订单 ORD123 的退货运费谁出？" —— 问的是运费规则，应走 FAQ 而不是查订单状态。
+KNOWLEDGE_MARKERS = (
+    "运费", "政策", "规则", "规定", "条件", "标准", "流程", "谁出", "谁承担", "谁付",
+    "怎么退", "如何退", "能不能退", "可以退吗", "能退吗", "怎么申请", "如何申请",
+    "发票", "优惠券", "会员", "积分", "保修", "售后政策", "支持吗", "条件是什么",
+)
+
 _INTENT_SYSTEM_PROMPT = """你是一个电商客服意图分类器。判断用户问题属于哪类：
 - precise_query: 用户查询自己订单/物流/退款的具体状态（通常提到订单号、物流单号，或明显在询问某个订单现在怎么样了）
 - knowledge: 询问平台政策、规则、FAQ 知识（退换货政策、运费规则、优惠券、发票、售后流程等）
 - other: 闲聊、寒暄或与客服无关的内容
 
+注意：询问"规则/政策/流程/运费归属"的问题属于 knowledge，即使提到了订单号。
 只输出 JSON，格式：{"intent": "...", "reason": "一句话理由"}"""
+
+
+def has_knowledge_marker(question: str) -> bool:
+    """是否为政策/规则类问法。"""
+    return any(kw in (question or "") for kw in KNOWLEDGE_MARKERS)
 
 
 def detect_entities(question: str) -> dict:
@@ -36,6 +50,9 @@ def detect_entities(question: str) -> dict:
 
 
 def has_precise_signal(question: str, entities: dict) -> bool:
+    """是否存在"在问具体订单/物流状态"的信号（政策问法不算）。"""
+    if has_knowledge_marker(question):
+        return False
     if entities["order_ids"] or entities["tracking_nos"]:
         return True
     return any(kw in question for kw in PRECISE_KEYWORDS)
@@ -70,6 +87,11 @@ async def classify(question: str, history: list[dict] | None = None) -> dict:
     """返回 {"intent": "precise_query"|"knowledge"|"other", "entities": {...}, "method": "..."}"""
     history = history or []
     entities = detect_entities(question)
+
+    # 第零层：政策/规则类问法优先（即使带订单号也走 FAQ）
+    # 例："订单 ORD123 的退货运费谁出？" → knowledge，避免用订单状态答非所问
+    if has_knowledge_marker(question):
+        return {"intent": "knowledge", "entities": entities, "method": "policy_keyword"}
 
     # 第一层：正则快路径（订单号/物流单号格式命中）
     if entities["order_ids"] or entities["tracking_nos"]:
