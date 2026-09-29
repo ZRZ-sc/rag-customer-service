@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     handoff_webhook_url: str = ""                 # 预留：推送到人工客服系统的回调地址
     handoff_webhook_timeout: float = 5.0
 
+    # ---- 缓存预热（流程3） ----
+    cache_warmup_on_startup: bool = False     # 启动后自动预热高频问题（会产生 LLM 费用，默认关闭）
+    cache_warmup_limit: int = 20              # 启动预热条数（按高频清单权重降序）
+    cache_warmup_base_url: str = "http://127.0.0.1:8000"   # 自调用地址（端口不同需覆盖）
+    cache_warmup_delay: float = 8.0           # 启动后延迟多久开始（等服务进入监听状态）
+
     # ---- 会话 ----
     session_ttl_seconds: int = 1800        # 会话 30 分钟过期
     session_max_turns: int = 10            # 最多保留 10 轮

@@ -1,0 +1,1534 @@
+{
+  "meta": {
+    "version": "1.0",
+    "generated_by": "scripts/build_eval_set.py",
+    "notes": "expect.must_contain=全部命中；must_contain_any=任一命中；rewritten_contains/not_contains 校验指代消解与政策护栏",
+    "total_cases": 79
+  },
+  "cases": [
+    {
+      "id": "precise_order_001",
+      "category": "precise_query",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100001",
+              "已签收"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_002",
+      "category": "precise_query",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100002 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100002",
+              "已发货"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_003",
+      "category": "precise_query",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100003 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100003",
+              "已退款"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_004",
+      "category": "precise_query",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100004 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100004",
+              "已发货"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_005",
+      "category": "precise_query",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100005 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100005",
+              "已支付"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_006",
+      "category": "precise_query",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100006 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100006",
+              "已签收"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_007",
+      "category": "precise_query",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100007 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100007",
+              "待处理"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_order_008",
+      "category": "precise_query",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100008 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100008",
+              "已取消"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_paraphrase_01",
+      "category": "precise_query",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "帮我查下订单 ORD20240100001 现在什么状态",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100001"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_paraphrase_02",
+      "category": "precise_query",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "订单 ORD20240100004 的快递单号是多少",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "ORD20240100004"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_tracking_9012",
+      "category": "precise_query",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "查询物流单号 SF123456789012 的进度",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "SF123456789012",
+              "已签收"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "precise_tracking_1098",
+      "category": "precise_query",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "查询物流单号 YT987654321098 的进度",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "must_contain": [
+              "YT987654321098",
+              "已发货"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_order_001",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪里了？",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_order_002",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100002 到哪里了？",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_order_003",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100003 到哪里了？",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_order_004",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100004 到哪里了？",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_order_005",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100005 到哪里了？",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "authz_tracking_01",
+      "category": "authz",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "查询物流单号 SF123456789012 的进度",
+          "expect": {
+            "status": 403,
+            "code": 403
+          }
+        }
+      ]
+    },
+    {
+      "id": "notfound_order_01",
+      "category": "authz",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD99999999999 到哪了",
+          "expect": {
+            "status": 404,
+            "code": 404
+          }
+        }
+      ]
+    },
+    {
+      "id": "notfound_order_02",
+      "category": "authz",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "帮我查订单 ORD20240199999 的状态",
+          "expect": {
+            "status": 404,
+            "code": 404
+          }
+        }
+      ]
+    },
+    {
+      "id": "notfound_tracking_01",
+      "category": "authz",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "查询物流单号 SF000000000000",
+          "expect": {
+            "status": 404,
+            "code": 404
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_01",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "七天无理由退货的条件是什么？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "7天",
+              "七天"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_02",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "怎么申请退货？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "售后",
+              "我的订单"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_03",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退货的运费谁出？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "买家承担",
+              "运费险",
+              "我们承担"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_04",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退货退款多久能到账？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "工作日"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_05",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "可以换货吗？怎么换？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "换货"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_06",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "商品有质量问题怎么处理？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "质量问题"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_07",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退款会退到哪里？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "原路"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_08",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "已经发货了还能取消订单吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "拦截",
+              "拒收"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_09",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退货商品寄回地址是什么？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "退货码",
+              "售后页面",
+              "寄回地址"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_10",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "支持上门取件退换货吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "上门取件"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_11",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "订单发货后多久能到？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "2-4天",
+              "48小时",
+              "2~4天"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_12",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "可以修改收货地址吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "未发货",
+              "修改"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_13",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "怎么查看物流进度？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "查看物流",
+              "物流轨迹",
+              "物流单号"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_14",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "快递显示签收但我没收到怎么办？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "客服",
+              "快递柜",
+              "驿站"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_15",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "支持哪些快递公司？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "顺丰"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_16",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "可以指定快递公司吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "不支持"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_17",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "发货后可以加急吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "不支持"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_18",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "商品破损了怎么办？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "拒收",
+              "拍照"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_19",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "可以支持货到付款吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "不支持"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_20",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "支付失败怎么办？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "重试",
+              "凭证"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_21",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "支持花呗/白条支付吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "花呗"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_22",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "下单后可以改支付方式吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "取消订单",
+              "支付前"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_23",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "怎么开具发票？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "电子发票",
+              "税号"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_24",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "发票可以开公司抬头吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "税号",
+              "企业抬头",
+              "公司名称"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_25",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "发票多久能开出来？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "工作日"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_26",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "优惠券怎么领取和使用？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "优惠券"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_27",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "优惠券过期了还能用吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "过期"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_28",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "怎么成为会员？会员有什么权益？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "会员"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_29",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "保修期是多久？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "一年",
+              "保修"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_30",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "如何修改绑定的手机号？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "must_contain_any": [
+              "安全中心",
+              "验证",
+              "手机号"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_01",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "东西买回来发现是坏的能修吗",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "保修",
+              "维修",
+              "质量"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_02",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我买的东西有问题想退掉咋弄",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "售后",
+              "退货",
+              "退款"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_03",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退的钱啥时候能打回我账户",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "工作日",
+              "原路",
+              "退款"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_04",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "能不能指定用顺丰给我发",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "不支持",
+              "快递"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_05",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "能开电子发票不",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "发票"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "knowledge_synonym_06",
+      "category": "knowledge",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "发到新疆一般几天到",
+          "expect": {
+            "status": 200,
+            "source": "rag",
+            "must_contain_any": [
+              "偏远",
+              "天",
+              "快递"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_01",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "那什么时候能到？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100001"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_02",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "它现在到哪了",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100001"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_03",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100002 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "什么时候能到？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100002"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_04",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100002 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "那现在是什么状态？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100002"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_05",
+      "category": "multi_turn",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100004 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "那什么时候能到？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100004"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_06",
+      "category": "multi_turn",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100004 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "什么时候能到？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100004"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_07",
+      "category": "multi_turn",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100006 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "它现在到哪了",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100006"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_status_08",
+      "category": "multi_turn",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100007 到哪里了？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database"
+          }
+        },
+        {
+          "question": "那现在是什么状态？",
+          "expect": {
+            "status": 200,
+            "intent": "precise_query",
+            "source": "database",
+            "rewritten_contains": "ORD20240100007"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_policy_01",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪里了？",
+          "expect": {
+            "status": 200,
+            "source": "database"
+          }
+        },
+        {
+          "question": "那退货运费谁出？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "rewritten_not_contains": "ORD20240100001"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_policy_02",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100002 到哪里了？",
+          "expect": {
+            "status": 200,
+            "source": "database"
+          }
+        },
+        {
+          "question": "那还能换货吗？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "rewritten_not_contains": "ORD20240100002"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_policy_03",
+      "category": "multi_turn",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100003 到哪里了？",
+          "expect": {
+            "status": 200,
+            "source": "database"
+          }
+        },
+        {
+          "question": "那退款多久到账？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "rewritten_not_contains": "ORD20240100003"
+          }
+        }
+      ]
+    },
+    {
+      "id": "multi_policy_04",
+      "category": "multi_turn",
+      "user_id": "user_002",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100004 到哪里了？",
+          "expect": {
+            "status": 200,
+            "source": "database"
+          }
+        },
+        {
+          "question": "那保修多久？",
+          "expect": {
+            "status": 200,
+            "intent": "knowledge",
+            "source": "rag",
+            "rewritten_not_contains": "ORD20240100004"
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_auth_01",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "none",
+      "turns": [
+        {
+          "question": "退货运费谁出？",
+          "expect": {
+            "status": 401,
+            "code": 401
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_auth_02",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "invalid",
+      "turns": [
+        {
+          "question": "我的订单 ORD20240100001 到哪了？",
+          "expect": {
+            "status": 401,
+            "code": 401
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_auth_03",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "malformed",
+      "turns": [
+        {
+          "question": "你好",
+          "expect": {
+            "status": 401,
+            "code": 401
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_param_01",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退退",
+          "expect": {
+            "status": 422
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_param_02",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "查询物流单号 SF123456789012 的进度",
+          "expect": {
+            "status": 422
+          }
+        }
+      ],
+      "broken": "no_session"
+    },
+    {
+      "id": "invalid_chitchat_01",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "你好",
+          "expect": {
+            "status": 200
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_chitchat_02",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "谢谢",
+          "expect": {
+            "status": 200
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_gibberish_01",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "asdfghjkl zxcvbnm",
+          "expect": {
+            "status": 200
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_gibberish_02",
+      "category": "invalid",
+      "user_id": "user_001",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "？？？？？？？？",
+          "expect": {
+            "status": 200
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid_lowconf_handoff_01",
+      "category": "invalid",
+      "user_id": "user_003",
+      "auth": "valid",
+      "turns": [
+        {
+          "question": "贵司的量子传送门保修几年",
+          "expect": {
+            "status": 200,
+            "handoff_ticket": true
+          }
+        }
+      ]
+    }
+  ]
+}

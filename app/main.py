@@ -1,4 +1,5 @@
 """FastAPI 应用入口。"""
+import asyncio
 import os
 import time
 import uuid
@@ -17,6 +18,9 @@ from app.core.logging import logger, request_id_var, setup_logging, trace_id_var
 from app.core.metrics import metrics_response
 from app.db import milvus, postgres, redis
 from app.services.rag.retriever import hybrid_retriever
+
+# 后台任务引用集合（防止 asyncio 任务被 GC 回收）
+_background_tasks: set[asyncio.Task] = set()
 
 
 @asynccontextmanager
@@ -63,6 +67,34 @@ async def lifespan(_: FastAPI):
             logger.warning("model preload failed (will lazy-load on first request): {}", exc)
     else:
         logger.info("model preload disabled (lazy load on first RAG request)")
+
+    # 缓存预热（流程3）：启动后延迟自调用 /api/v1/chat，把高频问题预先写入各级缓存。
+    # 默认关闭（会产生 LLM 调用费用），用 CACHE_WARMUP_ON_STARTUP=true 打开。
+    if settings.cache_warmup_on_startup:
+        async def _warmup_after_startup() -> None:
+            await asyncio.sleep(settings.cache_warmup_delay)
+            try:
+                from app.services.cache_warmup import load_warmup_questions, warm_cache
+
+                questions = load_warmup_questions(limit=settings.cache_warmup_limit)
+                stats = await warm_cache(
+                    questions, base_url=settings.cache_warmup_base_url, concurrency=2
+                )
+                logger.info(
+                    "startup cache warmup | ok={} failed={} cached {}->{}/{} elapsed={}ms",
+                    stats["ok"], stats["failed"], stats["before"]["warmed"],
+                    stats["after"]["warmed"], stats["total"], stats["elapsed_ms"],
+                )
+            except Exception as exc:
+                logger.warning("startup cache warmup failed: {}", exc)
+
+        task = asyncio.create_task(_warmup_after_startup())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        logger.info(
+            "startup cache warmup scheduled (limit={} base={})",
+            settings.cache_warmup_limit, settings.cache_warmup_base_url,
+        )
 
     yield
 

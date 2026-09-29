@@ -1,7 +1,13 @@
 """单元测试：意图识别（正则）、检索工具（tokenize/RRF）、多轮上下文改写。"""
 import pytest
 
-from app.services.intent import classify, detect_entities, has_knowledge_marker, has_precise_signal
+from app.services.intent import (
+    classify,
+    detect_entities,
+    has_knowledge_marker,
+    has_precise_signal,
+    has_status_intent,
+)
 from app.services.query_rewrite import (
     _parse_rewrite,
     _rewrite_with_memory,
@@ -209,12 +215,97 @@ async def test_rewrite_query_noop_for_standalone_question():
         ("退货流程是什么", True),
         ("怎么申请售后", True),
         ("怎么开发票", True),
+        # N4 评测发现的漏词：曾导致多轮追问被误路由到数据库
+        ("那还能换货吗？", True),
+        ("那退款多久到账？", True),
+        ("这个订单的维修政策是什么", True),
         ("我的订单什么时候能到", False),
+        ("那什么时候能到？", False),
         ("物流到哪了", False),
     ],
 )
 def test_has_knowledge_marker(question, expected):
     assert has_knowledge_marker(question) is expected
+
+
+async def test_classify_policy_followups_stay_knowledge():
+    """N4 评测回归：带订单号的政策类追问必须走知识类，而不是查订单状态。"""
+    for q in ("订单 ORD20240100001 还能换货吗？", "订单 ORD20240100001 退款多久到账？"):
+        res = await classify(q)
+        assert res["intent"] == "knowledge", q
+        assert res["method"] == "policy_keyword", q
+
+
+# ---- 压测发现的跨用户上下文泄漏回归 ----
+
+
+@pytest.mark.parametrize(
+    "question, expected",
+    [
+        ("那什么时候能到？", True),
+        ("发货了吗", True),
+        ("它现在到哪了", True),
+        ("我的订单什么时候能到", True),
+        ("可以指定快递公司吗？", False),      # 规则类问题，主题词不是状态意图
+        ("退货的运费谁出？", False),
+        ("怎么开具发票？", False),
+    ],
+)
+def test_has_status_intent(question, expected):
+    assert has_status_intent(question) is expected
+
+
+def test_complete_faq_question_is_not_followup():
+    """压测回归：完整 FAQ 问题（即使较短、以"吗"结尾）不得被判为追问。
+
+    否则 LLM 会把同一 session 里其他用户的订单号注入改写结果，
+    导致知识问答被误路由为订单查询并触发越权 403。
+    """
+    assert needs_rewrite("可以指定快递公司吗？", _HISTORY, _MEMORY) is False
+    assert needs_rewrite("怎么开具发票？", _HISTORY, _MEMORY) is False
+    assert is_standalone("可以指定快递公司吗？") is True
+
+
+async def test_rewrite_guard_blocks_entity_injection_for_non_status_question(
+    monkeypatch, no_rewrite_cache
+):
+    """即使会话中存在订单记忆，非状态类问题的改写结果也不得带订单号。"""
+
+    async def _inject():
+        return _FakeMsg(
+            '{"rewritten": "订单 ORD20240100001 可以指定快递公司吗？", "used_context": true}'
+        )
+
+    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_inject))
+    res = await rewrite_query("可以指定快递公司吗？", _HISTORY, _MEMORY)
+    assert "ORD20240100001" not in res["rewritten"]
+    assert "快递公司" in res["rewritten"]
+
+
+async def test_entity_memory_is_user_bound(monkeypatch):
+    """实体记忆与写入者绑定：他人读取应得到空结果（跨用户隔离）。"""
+    from app.services import conversation as conv
+
+    stored = {}
+
+    class _FakeRedis:
+        async def get(self, key):
+            return stored.get(key)
+
+        async def set(self, key, value, ex=None):
+            stored[key] = value
+
+        async def delete(self, *keys):
+            for k in keys:
+                stored.pop(k, None)
+
+    monkeypatch.setattr(conv, "get_redis", lambda: _FakeRedis())
+
+    await conv.set_last_entities("sess-1", {"order_ids": ["ORD20240100001"], "tracking_nos": []}, "user_001")
+    mine = await conv.get_last_entities("sess-1", "user_001")
+    other = await conv.get_last_entities("sess-1", "user_002")
+    assert mine["order_ids"] == ["ORD20240100001"]
+    assert other["order_ids"] == []           # 他人不可见
 
 
 def test_strip_injected_entities():

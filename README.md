@@ -197,6 +197,58 @@ powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
 
 > 注意：监控栈与主服务相互独立。主服务停止时 Prometheus 目标会变为 down，会触发 `RagServiceDown` 告警。
 
+## 质量保障：评测 / 压测 / 缓存预热
+
+### N4 准确率评测
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.build_eval_set          # 生成评测集（79 条 / 91 轮次）
+.\.venv\Scripts\python.exe -m scripts.eval_accuracy           # 全量评测 → docs/eval_report.md
+.\.venv\Scripts\python.exe -m scripts.eval_accuracy --category multi_turn   # 只跑某一类
+```
+
+| 指标 | 实测 | 需求目标 |
+|------|------|---------|
+| 意图识别准确率 | **100%**（62/62） | >90% ✅ |
+| 答案正确率 | **100%**（78/78） | >85% ✅ |
+| HTTP 状态符合率 | 100%（含 401/403/404/422） | — |
+| 延迟 | 平均 439ms / P50 489ms / P99 1512ms | — |
+
+评测集覆盖：精确查询 12 · 越权与无效实体 9 · 知识问答 36（含同义改写）· 多轮追问 12 · 异常输入 10。
+完整报告见 `docs/eval_report.md`。
+
+### N1/N5 压测（Locust）
+
+```powershell
+# 压测专用实例（无模型预加载、关闭限流，与生产实例分端口）
+$env:PRELOAD_MODELS="false"; $env:RATE_LIMIT_ENABLED="false"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8001
+
+.\.venv\Scripts\python.exe -m scripts.warmup_cache --base http://127.0.0.1:8001   # 预热缓存
+$env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="50:30,100:30,200:45,300:45"
+.\.venv\Scripts\python.exe -m locust -f loadtest\locustfile.py --headless --csv loadtest\results\cache
+.\.venv\Scripts\python.exe -m loadtest.summarize --prefix loadtest/results/cache   # 汇总分档位结果
+```
+
+| 画像 | 吞吐上限 | 说明 |
+|------|---------|------|
+| 缓存命中型 | **350 RPS** ✅ (N1>200) | P50 54ms@50 并发 |
+| 纯精确查询 | 312 RPS | PostgreSQL 未打满，全程 0 失败 |
+| 冷启动 RAG | 5 RPS | LLM + CPU 重排上限 |
+| 500 并发 | 331 RPS，0 个 5xx ✅ (N5) | P99 由 3.6s 劣化到 8.2s（排队） |
+
+瓶颈定位与调优建议见 `docs/loadtest_report.md`。
+
+### 缓存预热（流程3）
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.warmup_cache                    # 预热高频清单（20 条）
+.\.venv\Scripts\python.exe -m scripts.warmup_cache --limit 10 --clear-first
+.\.venv\Scripts\python.exe -m scripts.warmup_cache --file data/faq/sample_faq.json --limit 0   # 全量
+```
+服务启动自动预热（默认关闭，会产生 LLM 费用）：`.env.local` 设 `CACHE_WARMUP_ON_STARTUP=true`，
+可用 `CACHE_WARMUP_LIMIT` / `CACHE_WARMUP_BASE_URL` 调整。
+
 ## 核心流程
 
 ```

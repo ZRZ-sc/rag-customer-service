@@ -27,7 +27,7 @@ from app.services.intent import (
     TRACKING_RE,
     detect_entities,
     has_knowledge_marker,
-    has_precise_signal,
+    has_status_intent,
 )
 from app.services.llm import get_llm
 
@@ -40,6 +40,9 @@ _PRONOUN_RE = re.compile(
 _SHORT_FOLLOWUP_RE = re.compile(
     r"^(呢|那呢|什么时候|多久|还要|要多久|多少钱|为什么|几点|多长|几天)"
 )
+
+# 护栏版本号：参与改写缓存键，护栏逻辑变更时自动失效历史缓存
+_GUARD_VERSION = "g2"
 
 _REWRITE_SYSTEM_PROMPT = """你是多轮对话的查询改写助手。任务：把用户当前问题改写为**不依赖上下文即可独立理解**的问题。
 
@@ -66,17 +69,24 @@ def is_standalone(question: str) -> bool:
         return False
     if _PRONOUN_RE.search(q):
         return False
-    if len(q) <= 12 and _SHORT_FOLLOWUP_RE.match(q):
+    # 只有"无实义内容"的极简追问才跳过 L1 直接探测（"可以开发票吗？"属完整问题）
+    if len(q) <= 8 and _SHORT_FOLLOWUP_RE.match(q):
         return False
-    if len(q) <= 12 and (
-        q.endswith("呢") or q.endswith("呢？") or q.endswith("吗") or q.endswith("吗？")
+    # 在问订单/物流状态但没带单号 → 依赖上下文，不能走 L1 快速探测
+    if has_status_intent(q) and not (
+        detect_entities(q)["order_ids"] or detect_entities(q)["tracking_nos"]
     ):
         return False
     return True
 
 
 def needs_rewrite(question: str, history: list[dict], last_entities: dict) -> bool:
-    """判断是否需要结合上下文改写（避免对独立问题做无谓的 LLM 调用）。"""
+    """判断是否需要结合上下文改写（避免对独立问题做无谓的 LLM 调用）。
+
+    注意（压测中发现的缺陷）：不能仅凭"以 吗/呢 结尾且较短"就判定为追问——
+    "可以指定快递公司吗？"是完整问题，一旦被当成追问，LLM 可能把同一 session 里
+    **其他用户**的订单号注入改写结果，导致知识问答被误路由为订单查询（403）。
+    """
     if not history:
         return False
     q = (question or "").strip()
@@ -88,13 +98,12 @@ def needs_rewrite(question: str, history: list[dict], last_entities: dict) -> bo
         return False
     if _PRONOUN_RE.search(q):
         return True
-    if len(q) <= 12 and _SHORT_FOLLOWUP_RE.match(q):
-        return True
-    if len(q) <= 12 and (q.endswith("呢") or q.endswith("呢？") or q.endswith("吗") or q.endswith("吗？")):
+    # 极简追问：无实义内容的时间/原因类短问句（"呢？""多久？""什么时候？"）
+    if len(q) <= 8 and _SHORT_FOLLOWUP_RE.match(q):
         return True
     # 省略主语的追问：疑似在问订单/物流状态却未带单号，而会话中存在实体记忆
     has_memory = bool(last_entities.get("order_ids") or last_entities.get("tracking_nos"))
-    if has_memory and has_precise_signal(q, entities):
+    if has_memory and has_status_intent(q):
         return True
     return False
 
@@ -130,7 +139,7 @@ def _rewrite_with_memory(question: str, last_entities: dict) -> str | None:
 
 
 def _strip_injected_entities(text: str) -> str:
-    """剥离 LLM 误注入的订单号/物流单号（政策类问题不该带实体）。
+    """剥离 LLM 误注入的订单号/物流单号（非状态类问题不该带实体）。
 
     例："订单 ORD20240100002 的退货运费由谁承担？" → "退货运费由谁承担？"
     """
@@ -140,10 +149,36 @@ def _strip_injected_entities(text: str) -> str:
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     # 去掉残留的前缀标签与"的"："订单  的退货运费…" → "退货运费…"
     cleaned = re.sub(
-        r"^[\s，,：:]*((订单号?|物流单号|运单号?|单号|本单|此单|该单)\s*)*的?\s*", "", cleaned
+        r"^[\s，:：]*((订单号?|物流单号|运单号?|单号|本单|此单|该单)\s*)*的?\s*", "", cleaned
     )
     cleaned = cleaned.strip(" ，,。:：")
     return cleaned or text
+
+
+def _apply_guards(question: str, rewritten: str, method: str) -> tuple[str, str]:
+    """对改写结果应用两道实体护栏（写入侧与缓存读取侧都会调用）。
+
+    护栏1（政策类）：原问题是规则/政策问法时，剥离注入的实体 ——
+        否则"那退货运费谁出？"可能被改写为带订单号的句子，被正则误判为精确查询。
+    护栏2（非状态类）：原问题不是在问订单/物流状态时，一律不得携带实体 ——
+        压测中发现 LLM 会把同一 session 中其他用户的订单号注入 FAQ 问题，
+        导致知识问答被误路由为订单查询并触发越权 403。
+    """
+    if has_knowledge_marker(question):
+        stripped = _strip_injected_entities(rewritten)
+        if stripped != rewritten:
+            logger.info("query rewrite guard(policy) | {!r} -> {!r}", rewritten, stripped)
+            rewritten = stripped
+            method = method if method.endswith("policy_guard") else f"{method}+policy_guard"
+
+    orig_ents = detect_entities(question)
+    if not (orig_ents["order_ids"] or orig_ents["tracking_nos"]) and not has_status_intent(question):
+        stripped = _strip_injected_entities(rewritten)
+        if stripped != rewritten:
+            logger.info("query rewrite guard(no-status-intent) | {!r} -> {!r}", rewritten, stripped)
+            rewritten = stripped
+            method = method if method.endswith("entity_guard") else f"{method}+entity_guard"
+    return rewritten, method
 
 
 def _context_fingerprint(history: list[dict], last_entities: dict) -> str:
@@ -183,17 +218,23 @@ async def rewrite_query(
         return result
 
     cache_key = cache_svc.rewrite_cache_key(
-        question, _context_fingerprint(history, last_entities)
+        question, f"{_context_fingerprint(history, last_entities)}|{_GUARD_VERSION}"
     )
     cached = await cache_svc.get_json(cache_key, name="query_rewrite")
     if cached and cached.get("rewritten"):
-        context_rewrite_total.labels(applied="true", method=f"{cached.get('method', 'cache')}+cache").inc()
-        result.update(
-            rewritten=cached["rewritten"], applied=True, method=cached.get("method", "llm"), cached=True
-        )
-        logger.info(
-            "query rewrite cache HIT | original={!r} -> rewritten={!r}", question, cached["rewritten"]
-        )
+        # 护栏在读取侧同样生效：避免历史缓存（护栏上线前写入）绕过实体剥离
+        safe, method = _apply_guards(question, cached["rewritten"], cached.get("method", "llm"))
+        if safe != cached["rewritten"]:
+            logger.info(
+                "query rewrite cache HIT but guarded | {!r} -> {!r}", cached["rewritten"], safe
+            )
+            await cache_svc.set_json(
+                cache_key, {"rewritten": safe, "method": method},
+                ttl=settings.rewrite_cache_ttl_seconds, name="query_rewrite",
+            )
+        context_rewrite_total.labels(applied="true", method=f"{method}+cache").inc()
+        result.update(rewritten=safe, applied=True, method=method, cached=True)
+        logger.info("query rewrite cache HIT | original={!r} -> rewritten={!r}", question, safe)
         return result
 
     t0 = time.perf_counter()
@@ -226,27 +267,13 @@ async def rewrite_query(
         context_rewrite_duration.observe(time.perf_counter() - t0)
         return result
 
-    # ---- 护栏：原始问题是政策/规则类时，剥离注入的实体 ----
-    # 否则"那退货运费谁出？"可能被改写成带订单号的句子，进而被正则误判为精确查询，
-    # 最终用订单状态回答了一个规则类问题（实测踩过）。
-    if has_knowledge_marker(question):
-        stripped = _strip_injected_entities(rewritten)
-        if stripped != rewritten:
-            logger.info(
-                "query rewrite guard(policy) | {!r} -> {!r}", rewritten, stripped
-            )
-            rewritten = stripped
-            if method == "llm":
-                method = "llm+policy_guard"
+    # ---- 护栏（读取侧与写入侧共用同一实现）----
+    rewritten, method = _apply_guards(question, rewritten, method)
 
-    # 二次兜底：LLM 改写后仍无实体，但问题明显指向订单/物流状态 → 用记忆补全
-    if method in ("llm", "llm+policy_guard"):
+    # 二次兜底：LLM 改写后仍无实体，但问题确实在问订单/物流状态 → 用记忆补全
+    if method.startswith("llm") and "guard" not in method and has_status_intent(question):
         ents = detect_entities(rewritten)
-        if (
-            not ents["order_ids"]
-            and not ents["tracking_nos"]
-            and has_precise_signal(rewritten, ents)
-        ):
+        if not ents["order_ids"] and not ents["tracking_nos"]:
             mem = _rewrite_with_memory(rewritten, last_entities)
             if mem:
                 rewritten = mem

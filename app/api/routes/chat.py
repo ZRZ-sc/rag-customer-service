@@ -82,7 +82,7 @@ async def chat(
                 return ChatResponse(data=data)
 
         history = await conv_svc.get_history(session_id)
-        last_entities = await conv_svc.get_last_entities(session_id)
+        last_entities = await conv_svc.get_last_entities(session_id, user_id)
 
         # ---- 上下文查询改写（指代消解）：必须在意图识别之前 ----
         # 例："那什么时候能到？" + 历史中的订单号 → "订单 ORD20240100001 什么时候能到？"
@@ -101,8 +101,8 @@ async def chat(
         if intent == "precise_query":
             source = "database"
             precision_query_total.inc()
-            # 记住本次会话涉及的实体，供后续追问消解使用
-            await conv_svc.set_last_entities(session_id, intent_res["entities"])
+            # 记住本次会话涉及的实体，供后续追问消解使用（与当前用户绑定）
+            await conv_svc.set_last_entities(session_id, intent_res["entities"], user_id)
             data, retrieval = await _handle_precise(req, intent_res["entities"], user_id)
         else:
             rag_query_total.inc()

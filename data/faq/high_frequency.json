@@ -1,0 +1,22 @@
+[
+  {"question": "退货的运费谁出？", "weight": 120, "category": "退换货"},
+  {"question": "七天无理由退货的条件是什么？", "weight": 115, "category": "退换货"},
+  {"question": "怎么开具发票？", "weight": 96, "category": "发票"},
+  {"question": "退货退款多久能到账？", "weight": 92, "category": "退换货"},
+  {"question": "订单发货后多久能到？", "weight": 88, "category": "物流配送"},
+  {"question": "怎么申请退货？", "weight": 85, "category": "退换货"},
+  {"question": "怎么查看物流进度？", "weight": 80, "category": "物流配送"},
+  {"question": "可以修改收货地址吗？", "weight": 74, "category": "物流配送"},
+  {"question": "退款会退到哪里？", "weight": 70, "category": "退换货"},
+  {"question": "支持哪些快递公司？", "weight": 66, "category": "物流配送"},
+  {"question": "商品有质量问题怎么处理？", "weight": 62, "category": "退换货"},
+  {"question": "优惠券怎么领取和使用？", "weight": 58, "category": "优惠券"},
+  {"question": "保修期是多久？", "weight": 55, "category": "售后维修"},
+  {"question": "可以换货吗？怎么换？", "weight": 52, "category": "退换货"},
+  {"question": "快递显示签收但我没收到怎么办？", "weight": 48, "category": "物流配送"},
+  {"question": "发票可以开公司抬头吗？", "weight": 44, "category": "发票"},
+  {"question": "可以支持货到付款吗？", "weight": 40, "category": "支付"},
+  {"question": "支持上门取件退换货吗？", "weight": 36, "category": "退换货"},
+  {"question": "已经发货了还能取消订单吗？", "weight": 32, "category": "退换货"},
+  {"question": "怎么成为会员？会员有什么权益？", "weight": 30, "category": "会员"}
+]

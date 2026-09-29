@@ -7,6 +7,7 @@
 import json
 
 from app.config import settings
+from app.core.logging import logger
 from app.db.redis import get_redis
 
 
@@ -54,32 +55,45 @@ async def add_turn(session_id: str, role: str, content: str) -> list[dict]:
 # ---- 会话实体记忆（指代消解的关键状态） ----
 
 
-async def get_last_entities(session_id: str) -> dict:
-    """取会话中最近提到的实体：{"order_ids": [...], "tracking_nos": [...]}。"""
+async def get_last_entities(session_id: str, user_id: str | None = None) -> dict:
+    """取会话中最近提到的实体：{"order_ids": [...], "tracking_nos": [...]}。
+
+    安全约束：实体记忆与写入它的用户绑定。若调用方传入了 user_id 且与写入者不一致，
+    则返回空（防止共享 session_id 导致跨用户上下文泄漏——压测中曾因此产生越权 403）。
+    """
+    empty = {"order_ids": [], "tracking_nos": []}
     try:
         raw = await get_redis().get(_entity_key(session_id))
         if not raw:
-            return {"order_ids": [], "tracking_nos": []}
+            return empty
         data = json.loads(raw)
+        owner = data.get("user_id")
+        if user_id and owner and owner != user_id:
+            logger.warning(
+                "session entity memory owner mismatch | session={} owner={} requester={}",
+                session_id, owner, user_id,
+            )
+            return empty
         return {
             "order_ids": data.get("order_ids", []),
             "tracking_nos": data.get("tracking_nos", []),
         }
     except Exception:
-        return {"order_ids": [], "tracking_nos": []}
+        return empty
 
 
-async def set_last_entities(session_id: str, entities: dict) -> None:
-    """记录/合并会话实体（与对话历史同 TTL）。"""
+async def set_last_entities(session_id: str, entities: dict, user_id: str | None = None) -> None:
+    """记录/合并会话实体（与对话历史同 TTL），并记录写入者用于隔离校验。"""
     order_ids = [e for e in (entities.get("order_ids") or []) if e]
     tracking_nos = [e for e in (entities.get("tracking_nos") or []) if e]
     if not order_ids and not tracking_nos:
         return
     try:
-        current = await get_last_entities(session_id)
+        current = await get_last_entities(session_id, user_id)
         merged = {
             "order_ids": list(dict.fromkeys(order_ids + current["order_ids"]))[:5],
             "tracking_nos": list(dict.fromkeys(tracking_nos + current["tracking_nos"]))[:5],
+            "user_id": user_id,
         }
         await get_redis().set(
             _entity_key(session_id),

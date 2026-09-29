@@ -37,6 +37,22 @@ with open(ROOT / "data" / "faq" / "sample_faq.json", encoding="utf-8") as f:
 ORDERS = ["ORD20240100001", "ORD20240100002", "ORD20240100003", "ORD20240100004"]
 TRACKINGS = ["SF123456789012", "YT987654321098"]
 
+# 订单/物流 -> 归属用户：必须匹配，否则命中越权校验返回 403，污染容量测试结果
+# （实测踩过：随机订单 + 固定 user_001 导致 1172 次 403，把错误率推到 10%）
+ORDER_OWNERS = {
+    "ORD20240100001": "user_001",
+    "ORD20240100002": "user_001",
+    "ORD20240100003": "user_001",
+    "ORD20240100004": "user_002",
+    "ORD20240100005": "user_002",
+    "ORD20240100006": "user_002",
+    "ORD20240100007": "user_003",
+    "ORD20240100008": "user_003",
+}
+TRACKING_OWNERS = {"SF123456789012": "user_001", "YT987654321098": "user_002"}
+ORDERS = list(ORDER_OWNERS)
+TRACKINGS = list(TRACKING_OWNERS)
+
 _counter = itertools.count(1)
 
 
@@ -88,9 +104,11 @@ class CacheHitUser(_Base):
     def precise(self):
         sid = f"lt-cache-{next(_counter) % 50}"
         if random.random() < 0.7:
-            self.ask(f"我的订单 {random.choice(ORDERS)} 到哪里了？", sid)
+            oid = random.choice(ORDERS)
+            self.ask(f"我的订单 {oid} 到哪里了？", sid, user_id=ORDER_OWNERS[oid])
         else:
-            self.ask(f"查询物流单号 {random.choice(TRACKINGS)} 的进度", sid)
+            trk = random.choice(TRACKINGS)
+            self.ask(f"查询物流单号 {trk} 的进度", sid, user_id=TRACKING_OWNERS[trk])
 
 
 class PreciseOnlyUser(_Base):
@@ -102,9 +120,11 @@ class PreciseOnlyUser(_Base):
     def precise(self):
         sid = f"lt-precise-{next(_counter) % 100}"
         if random.random() < 0.6:
-            self.ask(f"我的订单 {random.choice(ORDERS)} 到哪里了？", sid)
+            oid = random.choice(ORDERS)
+            self.ask(f"我的订单 {oid} 到哪里了？", sid, user_id=ORDER_OWNERS[oid])
         else:
-            self.ask(f"查询物流单号 {random.choice(TRACKINGS)} 的进度", sid)
+            trk = random.choice(TRACKINGS)
+            self.ask(f"查询物流单号 {trk} 的进度", sid, user_id=TRACKING_OWNERS[trk])
 
 
 class ColdRagUser(_Base):
@@ -123,9 +143,13 @@ class ColdRagUser(_Base):
 
 
 class UnauthorizedUser(_Base):
-    """画像4：鉴权失败路径（只测 401 开销，不应参与成功统计）。"""
+    """画像4：鉴权失败路径（401）。
 
-    weight = 0 if PROFILE in ("precise", "rag") else 1
+    仅 mixed 画像启用：它会与目标接口争抢压测机资源，单独占用一个 Locust 统计行
+    （POST /api/v1/chat [401]），容量测试中不参与主接口的吞吐统计。
+    """
+
+    weight = 1 if PROFILE == "mixed" else 0
 
     @task
     def bad_token(self):
@@ -152,11 +176,9 @@ if PROFILE == "cache":
 elif PROFILE == "precise":
     CacheHitUser.weight = 0
     ColdRagUser.weight = 0
-    UnauthorizedUser.weight = 0
 elif PROFILE == "rag":
     CacheHitUser.weight = 0
     PreciseOnlyUser.weight = 0
-    UnauthorizedUser.weight = 0
 
 
 class StagedShape(LoadTestShape):
