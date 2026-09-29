@@ -5,7 +5,16 @@
 #   - 使用 CPU 版 PyTorch（镜像体积从 ~6GB 降到 ~2GB）
 #   - 本地模型（嵌入/重排）体积大且会随知识库换代，**不打进镜像**，通过卷挂载 ./models
 #   - 非 root 用户运行；健康检查走 /health
+#   - 国内网络可选镜像加速（默认官方源；实测 aliyun 的 pytorch-wheels 快一个数量级）：
+#       docker build \
+#         --build-arg TORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cpu \
+#         --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+#         -t rag-customer-service:latest .
 FROM python:3.12-slim AS base
+
+# 依赖源（可覆盖，见文件头注释）
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -22,9 +31,9 @@ WORKDIR /srv/app
 
 # ---- 依赖层（先装 torch CPU 再装其余，充分利用构建缓存） ----
 COPY requirements.txt ./
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
- && pip install -r requirements.txt \
- && pip install "psutil>=5.9"
+RUN pip install torch --index-url "$TORCH_INDEX_URL" \
+ && pip install -r requirements.txt --index-url "$PIP_INDEX_URL" \
+ && pip install "psutil>=5.9" --index-url "$PIP_INDEX_URL"
 
 # ---- 代码层 ----
 COPY app ./app

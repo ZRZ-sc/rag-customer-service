@@ -174,7 +174,7 @@ curl -H $H "http://localhost:8000/api/v1/admin/handoffs?status=pending"
 
 | 接口 | 说明 | 备注 |
 |------|------|------|
-| `POST /api/v1/chat` | 问答主接口 | 返回 answer/source/confidence/latency/tokens/**request_id**/intent/rewritten_question/handoff_ticket_id |
+| `POST /api/v1/chat` | 问答主接口 | 返回 answer/source/confidence/latency/tokens/**request_id**/intent/rewritten_question/handoff_ticket_id/**sources**（知识类命中的 FAQ 条目 + 重排分数） |
 | `POST /api/v1/handoff` | **转人工（创建工单）** | 用户主动请求人工；返回 ticket_id、排队提示 |
 | `GET /api/v1/handoff/{ticket_id}` | 查询工单状态 | pending / accepted / closed |
 | `POST /api/v1/feedback` | **点赞 / 点踩** | 用 `request_id` 定位问答记录；含归属校验 |
@@ -258,6 +258,11 @@ powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
 ```powershell
 # 全栈启动（首次会自动构建 app 镜像：CPU torch + 依赖，约 10-20 分钟）
 wsl -d Ubuntu -u root -e bash -lc "cd /mnt/d/AIagent/RAG-Agent && docker compose up -d"
+
+# 国内网络建议用镜像源构建（实测 torch wheel 速度 3.8MB/s vs 0.85MB/s，且官方源会长时间卡住）
+wsl -d Ubuntu -u root -e bash -lc "cd /mnt/d/AIagent/RAG-Agent && docker compose build app \
+  --build-arg TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cpu \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 
 # 只起基础设施 / 只起监控（开发模式：app 在 Windows 上跑，便于热重载）
 docker compose up -d etcd minio milvus postgres redis
@@ -364,7 +369,7 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 ## 验证测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest                      # 单元测试（86 个）
+.\.venv\Scripts\python.exe -m pytest                      # 单元测试（87 个）
 .\.venv\Scripts\python.exe -m scripts.eval_accuracy       # 端到端准确率评测（79 条 / 91 轮次）
 .\.venv\Scripts\python.exe -m scripts.latency_test        # 延迟测试（冷启动/缓存命中对比）
 .\.venv\Scripts\python.exe -m scripts.traffic_demo        # 流量演示（点亮监控面板）
@@ -394,6 +399,8 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 | 监控栈抓取 Windows 上的服务 | 容器内 `localhost:8000` 不通 | Prometheus 抓 **WSL 网关 IP**（`scripts\monitoring_up.ps1` 自动探测并写入 file_sd 目标） |
 | Windows 控制台 GBK | JSON 日志含 emoji 抛 `UnicodeEncodeError` 被静默丢弃 | `setup_logging()` 强制 stdout/stderr 转 UTF-8 |
 | 受限沙箱无命名管道 | loguru `enqueue=True` 导致启动失败 | 去掉 `enqueue`（单进程无需异步日志队列） |
+| **C 盘写满 → WSL 根文件系统只读** | 读接口全绿、写入全红：镜像层提交失败、PG 报 `Read-only file system`、Redis AOF 报 MISCONF、`/api/v1/admin/logs` 500 | 发行版磁盘迁到数据盘：`wsl --manage Ubuntu --move D:\WSL\Ubuntu`（C 盘 0→10.7GB，重启后容器自动恢复）；迁移前需退出 Docker Desktop 与保活窗口。完整记录见 `docs/environment_notes.md` |
+| 官方依赖源在国内极慢/卡死 | `pip install torch` 长时间无进展（WSL 内无网络连接、临时目录不增长） | 构建时改用镜像源：`--build-arg TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cpu --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` |
 
 ## Roadmap（后续阶段）
 
