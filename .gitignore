@@ -34,3 +34,6 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Load test artifacts (Locust CSV/HTML)
+loadtest/results/

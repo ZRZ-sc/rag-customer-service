@@ -25,21 +25,40 @@ async def ingest_file(path: str, category: str | None) -> None:
     pool = await get_pool()
     faq_ids: list[int] = []
     texts: list[str] = []
+    inserted = updated = 0
     for it in items:
         q = it["question"].strip()
         a = it["answer"].strip()
         cat = category or it.get("category", "general")
+        # 幂等导入：同一问题（question 唯一）走 UPDATE，不再产生重复文档
+        #   - 新增：version=1
+        #   - 修改：内容覆盖、version+1、重新发布（若此前被归档）、刷新 updated_at
+        #   - (xmax = 0) 用于区分本次是 INSERT 还是 UPDATE
         row = await pool.fetchrow(
             """INSERT INTO faq_documents (question, answer, category, version, status, created_at, updated_at)
-               VALUES ($1,$2,$3,1,'published', NOW(), NOW()) RETURNING id""",
+               VALUES ($1,$2,$3,1,'published', NOW(), NOW())
+               ON CONFLICT (question) DO UPDATE
+                  SET answer     = EXCLUDED.answer,
+                      category   = EXCLUDED.category,
+                      version    = faq_documents.version + 1,
+                      status     = 'published',
+                      updated_at = NOW()
+               RETURNING id, (xmax = 0) AS is_insert""",
             q, a, cat,
         )
         faq_ids.append(row["id"])
         texts.append(f"{q} {a}")
+        if row["is_insert"]:
+            inserted += 1
+        else:
+            updated += 1
 
     # 批量向量化
     vecs = embed_texts(texts)
     milvus.ensure_collection(dim=settings.embedding_dim)
+    # 先删除这些 faq_id 的旧向量，再写入新向量：
+    # Milvus 侧是 auto_id 追加写入，若不先删，更新文档会残留旧向量（同一 faq_id 多条向量）
+    milvus.delete_by_faq_ids(faq_ids)
     milvus.insert_embeddings(
         [{"faq_id": fid, "embedding": vec.tolist()} for fid, vec in zip(faq_ids, vecs)]
     )
@@ -51,9 +70,9 @@ async def ingest_file(path: str, category: str | None) -> None:
         )
 
     cleared = await invalidate_knowledge_cache()
-    print(f"[ok] ingested {len(items)} docs -> faq_ids={faq_ids}")
+    print(f"[ok] 处理 {len(items)} 条：新增 {inserted} 条，更新 {updated} 条（faq_ids={faq_ids}）")
     print(
-        "[ok] milvus upserted, cache cleared: "
+        "[ok] milvus 向量已替换，缓存已清理："
         f"answer={cleared['answer']} transform={cleared['transform']} rerank={cleared['rerank']}"
     )
     print("[!] 提示：如需应用内 BM25 索引立即刷新，请重启服务（或后续调用管理接口）")

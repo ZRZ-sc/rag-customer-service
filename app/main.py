@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
+from app.api.routes.support import router as support_router
 from app.config import settings
 from app.core.errors import ApiError
 from app.core.logging import logger, request_id_var, setup_logging, trace_id_var
@@ -46,18 +47,22 @@ async def lifespan(_: FastAPI):
         logger.warning("corpus load failed: {}", exc)
 
     # 预热本地模型（嵌入 + 重排），避免首个请求内加载导致超时
-    try:
-        import torch
+    # 可通过 PRELOAD_MODELS=false 关闭（低内存部署、或纯缓存命中场景无需常驻模型）
+    if settings.preload_models:
+        try:
+            import torch
 
-        torch.set_num_threads(8)
-        from app.services import embeddings
-        from app.services.rag.reranker import reranker
+            torch.set_num_threads(8)
+            from app.services import embeddings
+            from app.services.rag.reranker import reranker
 
-        embeddings.preload()
-        reranker.preload()
-        logger.info("local models preloaded")
-    except Exception as exc:
-        logger.warning("model preload failed (will lazy-load on first request): {}", exc)
+            embeddings.preload()
+            reranker.preload()
+            logger.info("local models preloaded")
+        except Exception as exc:
+            logger.warning("model preload failed (will lazy-load on first request): {}", exc)
+    else:
+        logger.info("model preload disabled (lazy load on first RAG request)")
 
     yield
 
@@ -103,7 +108,9 @@ async def request_context_middleware(request: Request, call_next):
 @app.exception_handler(ApiError)
 async def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
     logger.warning("api error code={} msg={}", exc.code, exc.message)
-    return JSONResponse(status_code=exc.http_status, content=exc.to_dict())
+    return JSONResponse(
+        status_code=exc.http_status, content=exc.to_dict(), headers=exc.headers or None
+    )
 
 
 @app.exception_handler(Exception)
@@ -116,6 +123,7 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
 
 
 app.include_router(chat_router, prefix="/api/v1")
+app.include_router(support_router)          # /api/v1/handoff、/api/v1/feedback（自带前缀）
 app.include_router(health_router)
 
 

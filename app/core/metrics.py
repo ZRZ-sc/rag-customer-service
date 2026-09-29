@@ -59,6 +59,19 @@ rag_fast_path_total = Counter(
     "rag_fast_path_total", "RAG 快速路径命中次数", ["result"]
 )
 
+# ---- 限流（429） ----
+rate_limited_total = Counter(
+    "rate_limited_total", "触发限流的请求数", ["scope"]
+)
+
+# ---- 转人工与反馈（F6 / F7） ----
+handoff_tickets_total = Counter(
+    "handoff_tickets_total", "转人工工单数", ["source", "priority"]
+)
+feedback_total = Counter(
+    "feedback_total", "用户反馈数", ["value"]
+)
+
 
 def metrics_response() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

@@ -369,3 +369,218 @@ async def test_rerank_cache_hit_reconstructs_ranking(monkeypatch):
     assert flag == "hit"
     assert called["rerank"] == 0
     assert [c["faq_id"] for c in ranked] == [1, 3]
+
+
+# ---- 第一阶段补齐：429 限流 / 转人工（F6） / 反馈 API ----
+
+from app.core.errors import RateLimitError  # noqa: E402
+
+
+class _FakeScript:
+    """替身 Redis Lua 脚本：返回预设结果或抛出异常。"""
+
+    def __init__(self, result=None, error=None):
+        self.result = result if result is not None else [1, 59]
+        self.error = error
+
+    async def __call__(self, keys=None, args=None):
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class _FakeRedis:
+    def __init__(self, script):
+        self._script = script
+
+    def register_script(self, _lua):
+        return self._script
+
+
+class _FakeRequest:
+    def __init__(self, host="10.0.0.9"):
+        self.client = type("Client", (), {"host": host})()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_script():
+    """Lua 脚本对象是模块级缓存，逐用例重置避免串扰。"""
+    from app.services import rate_limit
+
+    rate_limit._script = None
+    yield
+    rate_limit._script = None
+
+
+async def test_rate_limit_allows_within_bucket(monkeypatch):
+    from app.services import rate_limit
+
+    monkeypatch.setattr(rate_limit, "get_redis", lambda: _FakeRedis(_FakeScript([1, 59])))
+    allowed, remaining = await rate_limit.check_bucket("k", capacity=60, refill_per_sec=1.0)
+    assert allowed is True
+    assert remaining == 59
+
+
+async def test_rate_limit_blocks_when_exhausted(monkeypatch):
+    from app.services import rate_limit
+
+    monkeypatch.setattr(rate_limit, "get_redis", lambda: _FakeRedis(_FakeScript([0, 0])))
+    allowed, remaining = await rate_limit.check_bucket("k", capacity=60, refill_per_sec=1.0)
+    assert allowed is False
+    assert remaining == 0
+
+
+async def test_rate_limit_fail_open_on_redis_error(monkeypatch):
+    """Redis 故障时必须放行（需求文档 N8：依赖故障不得让服务整体不可用）。"""
+    from app.services import rate_limit
+
+    monkeypatch.setattr(
+        rate_limit, "get_redis", lambda: _FakeRedis(_FakeScript(error=RuntimeError("redis down")))
+    )
+    allowed, remaining = await rate_limit.check_bucket("k", capacity=42, refill_per_sec=1.0)
+    assert allowed is True
+    assert remaining == 42
+
+
+async def test_enforce_raises_429_with_retry_after(monkeypatch):
+    from app.services import rate_limit
+
+    async def _blocked(*args, **kwargs):
+        return False, 0
+
+    monkeypatch.setattr(rate_limit, "check_bucket", _blocked)
+    with pytest.raises(RateLimitError) as err:
+        await rate_limit.enforce("chat", "user:u1")
+    assert err.value.code == 429
+    assert err.value.http_status == 429
+    assert err.value.headers.get("Retry-After")
+
+
+async def test_enforce_disabled_allows_all(monkeypatch):
+    from app.services import rate_limit
+
+    monkeypatch.setattr(rate_limit.settings, "rate_limit_enabled", False)
+
+    async def _should_not_call(*args, **kwargs):
+        raise AssertionError("关闭限流后不应执行桶判定")
+
+    monkeypatch.setattr(rate_limit, "check_bucket", _should_not_call)
+    remaining = await rate_limit.enforce("chat", "user:u1")
+    assert remaining > 0
+
+
+def test_rate_limit_identity_prefers_user_id():
+    from app.services import rate_limit
+
+    assert rate_limit.identity_of("user_001", _FakeRequest()) == "user:user_001"
+    assert rate_limit.identity_of(None, _FakeRequest("127.0.0.1")) == "ip:127.0.0.1"
+
+
+def test_ticket_id_format_and_queue_hint():
+    from app.services import support
+
+    tid = support.new_ticket_id()
+    assert tid.startswith("HO")
+    assert len(tid) == 2 + 8 + 8              # HO + YYYYMMDD + 8 位随机
+    assert "尽快" in support.queue_hint(1)
+    assert "分钟" in support.queue_hint(5)
+
+
+def test_handoff_and_feedback_model_validation():
+    from app.models.support import FeedbackRequest, HandoffRequest
+
+    assert HandoffRequest(session_id="s1").priority == "normal"
+    assert FeedbackRequest(request_id="abc123", feedback=1).feedback == 1
+    assert FeedbackRequest(request_id="abc123", feedback=-1).feedback == -1
+    with pytest.raises(Exception):
+        FeedbackRequest(request_id="abc123", feedback=5)        # 仅允许 1/-1/0
+    with pytest.raises(Exception):
+        HandoffRequest(session_id="s1", priority="urgent")       # 仅允许 low/normal/high
+
+
+def _pool_returning(row):
+    class _Pool:
+        async def fetchrow(self, *args, **kwargs):
+            return row
+
+    async def _get_pool():
+        return _Pool()
+
+    return _get_pool
+
+
+def _pool_scripted(owner_row, update_row="__same__"):
+    """按 SQL 分流：SELECT 查归属，UPDATE 写反馈。记录被执行的语句以便断言。"""
+    calls = []
+
+    class _Pool:
+        async def fetchrow(self, sql, *args, **kwargs):
+            calls.append(sql)
+            if "SELECT user_id" in sql:
+                return owner_row
+            return owner_row if update_row == "__same__" else update_row
+
+    async def _get_pool():
+        return _Pool()
+
+    return _get_pool, calls
+
+
+async def test_save_feedback_status_mapping(monkeypatch):
+    from app.services import support
+
+    # request_id 不存在
+    monkeypatch.setattr(support, "get_pool", _pool_returning(None))
+    status, data = await support.save_feedback("r1", "user_001", 1, None)
+    assert status == "not_found" and data is None
+
+    # 归属不符（他人反馈）→ 必须拒绝，且不得执行 UPDATE
+    pool_factory, calls = _pool_scripted(owner_row={"user_id": "user_002"})
+    monkeypatch.setattr(support, "get_pool", pool_factory)
+    status, _ = await support.save_feedback("r1", "user_001", 1, None)
+    assert status == "forbidden"
+    assert not any("UPDATE dialogue_logs" in sql for sql in calls), "越权请求不得写入数据库"
+
+    # 正常写入
+    pool_factory, calls = _pool_scripted(
+        owner_row={"user_id": "user_001"},
+        update_row={"user_id": "user_001", "session_id": "s1", "feedback": 1, "feedback_at": None},
+    )
+    monkeypatch.setattr(support, "get_pool", pool_factory)
+    status, data = await support.save_feedback("r1", "user_001", 1, "很有帮助")
+    assert status == "updated"
+    assert data["feedback"] == 1
+    assert any("UPDATE dialogue_logs" in sql for sql in calls)
+
+
+async def test_create_ticket_persists(monkeypatch):
+    from app.services import support
+
+    captured = {}
+
+    class _Pool:
+        async def fetchrow(self, sql, *args):
+            captured["sql"] = sql
+            captured["args"] = args
+            return {
+                "ticket_id": args[0],
+                "status": "pending",
+                "priority": args[6],
+                "source": args[5],
+                "created_at": "2026-01-01T00:00:00",
+            }
+
+    async def _get_pool():
+        return _Pool()
+
+    monkeypatch.setattr(support, "get_pool", _get_pool)
+    monkeypatch.setattr(support.settings, "handoff_webhook_url", "")   # 不触发 webhook
+
+    ticket = await support.create_ticket(
+        session_id="s1", user_id="user_001", reason="低置信度", last_question="??",
+        source="auto", priority="high",
+    )
+    assert ticket["ticket_id"].startswith("HO")
+    assert ticket["status"] == "pending"
+    assert ticket["source"] == "auto"
+    assert "INSERT INTO handoff_tickets" in captured["sql"]

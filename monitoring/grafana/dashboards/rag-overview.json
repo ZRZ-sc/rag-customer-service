@@ -467,6 +467,87 @@
           "legendFormat": "applied={{applied}} · {{method}}"
         }
       ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "限流与人工介入（429 / 转人工 / 反馈）",
+      "description": "rate_limited_total（按 scope）、handoff_tickets_total（manual/auto）、feedback_total（点赞点踩）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 1, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (scope) (rate(rate_limited_total[5m]))",
+          "legendFormat": "限流 429 · {{scope}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (source) (rate(handoff_tickets_total[5m]))",
+          "legendFormat": "转人工 · {{source}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (value) (rate(feedback_total[5m]))",
+          "legendFormat": "反馈 · {{value}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "点赞点踩比",
+      "description": "近 1 小时正向反馈占比（feedback=1 / 全部反馈）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.7 },
+              { "color": "green", "value": 0.9 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(feedback_total{value=\"positive\"}[1h])) / clamp_min(sum(increase(feedback_total[1h])), 0.001)",
+          "legendFormat": "正向反馈占比"
+        }
+      ]
     }
   ]
 }

@@ -120,6 +120,50 @@ curl -X POST http://localhost:8000/api/v1/chat -H "Authorization: Bearer dev-tok
 curl http://localhost:8000/metrics
 ```
 
+## API 一览
+
+| 接口 | 说明 | 备注 |
+|------|------|------|
+| `POST /api/v1/chat` | 问答主接口 | 返回 answer/source/confidence/latency/tokens/**request_id**/intent/rewritten_question/handoff_ticket_id |
+| `POST /api/v1/handoff` | **转人工（创建工单）** | 用户主动请求人工；返回 ticket_id、排队提示 |
+| `GET /api/v1/handoff/{ticket_id}` | 查询工单状态 | pending / accepted / closed |
+| `POST /api/v1/feedback` | **点赞 / 点踩** | 用 `request_id` 定位问答记录；含归属校验 |
+| `GET /health` `/ready` | 存活 / 就绪探针 | `/ready` 检查 PG、Redis、Milvus、LLM |
+| `GET /metrics` | Prometheus 指标 | 不在 OpenAPI 文档中 |
+
+**转人工（F6）两种触发方式**：
+1. 用户主动：`POST /api/v1/handoff`（可带 reason / last_question / priority）
+2. **自动**：问答置信度低于 `CONFIDENCE_THRESHOLD`（默认 0.5）时，服务自动建单并在响应里回传 `handoff_ticket_id`，答案末尾附工单号
+
+**反馈闭环（F7）**：问答响应中的 `request_id`（亦见响应头 `X-Request-ID`）用于提交反馈
+```powershell
+curl -X POST http://localhost:8000/api/v1/feedback -H "Authorization: Bearer dev-token-change-me" -H "Content-Type: application/json" `
+  -d '{"request_id":"<问答返回的 request_id>","feedback":1,"user_id":"user_001","comment":"很有帮助"}'
+```
+`feedback` 取值：`1` 点赞 / `-1` 点踩 / `0` 取消；他人记录返回 403，未知 request_id 返回 404。
+
+**限流（429）**：应用层 Redis 令牌桶，按 `user_id`（缺失时按客户端 IP）计数
+| 配置 | 默认 | 说明 |
+|------|------|------|
+| `RATE_LIMIT_ENABLED` | true | 总开关 |
+| `RATE_LIMIT_PER_MINUTE` | 300 | 单身份每分钟请求数 |
+| `RATE_LIMIT_BURST` | 60 | 单身份突发容量 |
+| `RATE_LIMIT_GLOBAL_PER_MINUTE` | 0 | 全局桶（0=关闭），过载时用 429 卸载而非雪崩 |
+
+超限返回 `{"code":429,...,"data":{"scope":"chat","retry_after":5}}` + `Retry-After` 响应头。
+Redis 不可用时**放行**（fail-open），符合 N8：依赖故障不得让服务整体不可用。
+
+## 知识库更新（幂等）
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.ingest_kb --file data\faq\sample_faq.json
+# → [ok] 处理 42 条：新增 0 条，更新 42 条
+# → [ok] milvus 向量已替换，缓存已清理：answer=.. transform=.. rerank=..
+```
+- `question` 上有唯一索引，重复导入走 `ON CONFLICT (question) DO UPDATE`：**内容覆盖 + version+1 + 重新发布**，不会产生重复文档
+- Milvus 侧先按 faq_id 删除旧向量再写入，避免同一文档残留多条向量
+- 归档：`--delete <faq_id> ...`（同时移除向量并清缓存）
+
 ## 可观测性（Prometheus + Grafana）
 
 ```powershell
@@ -219,6 +263,8 @@ powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
 - [x] 阶段1：核心问答链路（意图路由 + 精确查询 + 混合检索 RAG + DeepSeek）
 - [x] 阶段2：多轮对话上下文改写（指代消解 + 实体记忆 + 政策护栏）
 - [x] 阶段3：四级缓存优化 + RAG 快速路径（缓存复用 <1s）
-- [x] 阶段4：可观测性集成（Prometheus + Grafana 13 面板 + 6 条告警规则）
-- [ ] 阶段5：降级演练与容灾脚本 + 知识库管理 API（管理后台）
-- [ ] 阶段6：Docker Compose 全栈一键部署（含 app/nginx 容器化）
+- [x] 阶段4：可观测性集成（Prometheus + Grafana 15 面板 + 6 条告警规则）
+- [x] 阶段5：知识库幂等更新（修重复插入缺陷）+ 429 限流 + F6 转人工 + 反馈 API
+- [ ] 阶段6：评测集与准确率量化（N4）+ 压测（N1/N5）+ 缓存预热脚本
+- [ ] 阶段7：管理后台 API（F7：问答日志与统计查询）
+- [ ] 阶段8：Docker Compose 全栈一键部署（含 app/nginx 容器化）

@@ -70,6 +70,23 @@ class Settings(BaseSettings):
     fast_path_min_margin: float = 0.05        # top1 与 top2 的最小分差
     fast_path_rerank_topk: int = 5            # 快速路径下送重排的候选数
 
+    # ---- 资源与运维开关 ----
+    preload_models: bool = True               # 启动即加载本地模型（省首个请求延迟，占 ~1.2GB 内存）
+    dialogue_log_enabled: bool = True         # 每请求写一条问答日志（高并发下可关闭以减轻 PG 写压力）
+
+    # ---- 限流（429） ----
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 300          # 单身份每分钟请求数（令牌补充速率）
+    rate_limit_burst: int = 60                # 单身份突发容量
+    rate_limit_global_per_minute: int = 0     # 全局每分钟上限（0=关闭；用于保护 CPU 密集实例）
+    rate_limit_global_burst: int = 0          # 全局突发容量（0 时取 per_minute/2）
+
+    # ---- 转人工（F6） ----
+    human_handoff_enabled: bool = True
+    handoff_auto_on_low_confidence: bool = True   # 低置信度自动建单
+    handoff_webhook_url: str = ""                 # 预留：推送到人工客服系统的回调地址
+    handoff_webhook_timeout: float = 5.0
+
     # ---- 会话 ----
     session_ttl_seconds: int = 1800        # 会话 30 分钟过期
     session_max_turns: int = 10            # 最多保留 10 轮

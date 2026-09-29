@@ -60,12 +60,36 @@ DDL = [
         feedback INT DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
     )""",
+    # 转人工工单（F6）
+    """CREATE TABLE IF NOT EXISTS handoff_tickets (
+        ticket_id VARCHAR(40) PRIMARY KEY,
+        session_id VARCHAR(64),
+        user_id VARCHAR(50),
+        reason VARCHAR(200),
+        last_question TEXT,
+        source VARCHAR(20) DEFAULT 'manual',   -- manual(用户主动) / auto(低置信度自动)
+        priority VARCHAR(10) DEFAULT 'normal',
+        status VARCHAR(20) DEFAULT 'pending',  -- pending / accepted / closed
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_orders_tracking ON orders(tracking_no)",
     "CREATE INDEX IF NOT EXISTS idx_faq_status ON faq_documents(status)",
     "CREATE INDEX IF NOT EXISTS idx_logs_session ON dialogue_logs(session_id)",
-    # 多轮指代消解：记录改写后的问题（幂等迁移，旧库直接补列）
+    # 防御性去重（必须在建唯一索引之前）：历史版本若因重复导入产生过同问题多行，保留 id 最小的一行
+    """DELETE FROM faq_documents a USING faq_documents b
+       WHERE a.question = b.question AND a.id > b.id""",
+    # ON CONFLICT (question) DO UPDATE 的前提：question 唯一
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_faq_documents_question ON faq_documents(question)",
+    "CREATE INDEX IF NOT EXISTS idx_handoff_status ON handoff_tickets(status, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_logs_request ON dialogue_logs(request_id)",
+    # ---- 幂等迁移（旧库直接补列） ----
+    # 多轮指代消解：记录改写后的问题
     "ALTER TABLE dialogue_logs ADD COLUMN IF NOT EXISTS rewritten_question TEXT",
+    # 用户反馈（F7 反馈闭环）：评论与时间
+    "ALTER TABLE dialogue_logs ADD COLUMN IF NOT EXISTS feedback_comment TEXT",
+    "ALTER TABLE dialogue_logs ADD COLUMN IF NOT EXISTS feedback_at TIMESTAMP",
 ]
 
 USERS = [

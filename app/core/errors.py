@@ -12,7 +12,7 @@
 
 
 class ApiError(Exception):
-    """业务异常基类：携带对外错误码与 HTTP 状态。"""
+    """业务异常基类：携带对外错误码、HTTP 状态与可选响应头。"""
 
     def __init__(
         self,
@@ -20,12 +20,14 @@ class ApiError(Exception):
         message: str,
         http_status: int = 400,
         data: dict | None = None,
+        headers: dict | None = None,
     ):
         super().__init__(message)
         self.code = code
         self.message = message
         self.http_status = http_status
         self.data = data
+        self.headers = headers or {}
 
     def to_dict(self) -> dict:
         return {"code": self.code, "message": self.message, "data": self.data}
@@ -42,8 +44,15 @@ class ForbiddenError(ApiError):
 
 
 class RateLimitError(ApiError):
-    def __init__(self, message: str = "请求过于频繁，请稍后再试", data=None):
-        super().__init__(429, message, http_status=429, data=data)
+    """429：触发限流（携带 Retry-After 响应头）。"""
+
+    def __init__(
+        self,
+        message: str = "请求过于频繁，请稍后再试",
+        data=None,
+        headers: dict | None = None,
+    ):
+        super().__init__(429, message, http_status=429, data=data, headers=headers)
 
 
 class NotFoundError(ApiError):

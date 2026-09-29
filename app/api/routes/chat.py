@@ -1,12 +1,12 @@
 """聊天接口：POST /api/v1/chat 完整编排。
 
-流程：会话历史 → **上下文查询改写（指代消解）** → 意图识别 → 路由分发（精确查询 / RAG）
-      → 缓存 → 响应 + 日志落库。
+流程：限流 → 会话历史 → **上下文查询改写（指代消解）** → 意图识别 → 路由分发（精确查询 / RAG）
+      → 缓存 → 低置信度自动转人工 → 响应 + 日志落库。
 """
 import time
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import verify_token
 from app.config import settings
@@ -24,6 +24,8 @@ from app.models.chat import ChatData, ChatRequest, ChatResponse
 from app.services import cache as cache_svc
 from app.services import conversation as conv_svc
 from app.services import precise_query
+from app.services import rate_limit
+from app.services import support as support_svc
 from app.services.intent import classify
 from app.services.query_rewrite import is_standalone, rewrite_query
 from app.services.rag.pipeline import LOW_CONFIDENCE_ANSWER, run_rag
@@ -32,11 +34,16 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    _: None = Depends(verify_token),
+) -> ChatResponse:
     t0 = time.perf_counter()
     user_id = req.user_id or "anonymous"
     session_id = req.session_id or uuid4().hex
-    request_id_var.set(uuid4().hex[:16])
+    request_id = uuid4().hex[:16]
+    request_id_var.set(request_id)
     user_id_var.set(user_id)
     session_id_var.set(session_id)
     concurrent_connections.inc()
@@ -44,6 +51,9 @@ async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatRespons
     source = "rag"
     status = "ok"
     try:
+        # ---- 限流（429）：放在业务逻辑之前，超限直接卸载 ----
+        await rate_limit.enforce("chat", rate_limit.identity_of(req.user_id, request))
+
         # ---- L1 快速探测：独立问题（无代词/省略）的改写结果就是原问题本身，
         #      因此可直接用原问题查答案缓存，省去历史/实体读取与改写流程（~5ms 命中）
         if is_standalone(req.question):
@@ -58,6 +68,7 @@ async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatRespons
                     session_id=req.session_id,
                     tokens_used=early.get("tokens_used", 0),
                     latency_ms=0,
+                    request_id=request_id,
                 )
                 await conv_svc.add_turns(
                     session_id, [("user", req.question), ("assistant", data.answer)]
@@ -105,8 +116,26 @@ async def chat(req: ChatRequest, _: None = Depends(verify_token)) -> ChatRespons
         latency_ms = int((time.perf_counter() - t0) * 1000)
         data.latency_ms = latency_ms
         data.intent = intent
+        data.request_id = request_id
         if rewrite_res["applied"]:
             data.rewritten_question = effective_question
+
+        # ---- F6：低置信度自动转人工（无法回答时建单，接口为 /api/v1/handoff） ----
+        if data.source == "fallback" and settings.handoff_auto_on_low_confidence:
+            try:
+                ticket = await support_svc.create_ticket(
+                    session_id=session_id,
+                    user_id=req.user_id,
+                    reason=f"低置信度自动转人工（confidence={data.confidence:.3f}）",
+                    last_question=req.question,
+                    source="auto",
+                    priority="high" if data.confidence < 0.2 else "normal",
+                )
+                data.handoff_ticket_id = ticket["ticket_id"]
+                data.answer = f"{data.answer}（已为您转接人工客服，工单号 {ticket['ticket_id']}）"
+            except Exception as exc:
+                logger.warning("auto handoff failed: {}", exc)
+
         chat_duration_seconds.observe(latency_ms / 1000.0)
 
         # ---- 问答日志落库（管理后台/统计用） ----
@@ -255,6 +284,10 @@ async def _log_dialogue(
 ) -> None:
     """写入 dialogue_logs（失败不影响主流程）。"""
     import json
+
+    if not settings.dialogue_log_enabled:
+        # 高并发压测/降载时可关闭，省去每请求一次 PG 写入
+        return
 
     try:
         pool = await get_pool()
