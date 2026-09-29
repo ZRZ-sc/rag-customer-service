@@ -3,6 +3,86 @@
 基于需求设计文档实现的生产级高并发 RAG 客服系统：自动识别**精确查询类**（订单/物流）与**知识类**（FAQ）问题，
 前者走 PostgreSQL 实时查询，后者走 混合检索 + Rerank + DeepSeek 生成 的完整 RAG 链路。
 
+## 项目亮点（简历可直接引用）
+
+- 设计并实现「意图路由 + 混合检索 + 四级缓存」的智能客服 RAG 系统，**缓存命中型流量实测 350 RPS**（需求目标 >200 QPS，超出 75%），
+  纯精确查询 312 RPS，L1 答案缓存命中延迟 **2-7ms**
+- 自研 RAG 快速路径（Top-1 向量相似度 ≥0.80 且分差 ≥0.05 直出，命中率 **49%**）+ 四级缓存
+  （答案 1h / 改写·扩展·重排各 24h），冷启动首答由 2.2-2.9s 降至 **0.76-1.35s**，缓存复用 **550-890ms**
+- 构建 79 条 / 91 轮次评测集，**意图识别准确率 100%（62/62）、答案正确率 100%（78/78）**、HTTP 状态符合率 100%
+- **500 并发压测 331 RPS、0 个 5xx**（无连接拒绝）；压测中定位并修复**跨用户上下文实体泄漏**越权缺陷
+  （1172 个 403 → 三处收口 + 10 个回归测试），修复后越权归零
+- 建立完整可观测与容灾体系：Prometheus 20+ 指标 / Grafana 15 面板 / 8 条告警，LLM·Milvus·Redis·PostgreSQL
+  四条降级链 + **LLM 熔断**（上游不可用时首次 61s → 后续 **0.2-0.6s** 返回兜底话术并自动转人工）
+
+## 系统架构
+
+```
+                    ┌──────────────────────────────────────────┐
+   浏览器 / API ────►│ Nginx（反向代理 + limit_req 限流 20r/s）  │
+                    └───────────────────┬──────────────────────┘
+                                        │ 8080 → app:8000
+                    ┌───────────────────▼──────────────────────┐
+                    │ FastAPI（async，单进程 uvicorn）          │
+                    │  ① 限流 429（Redis 令牌桶，fail-open）    │
+                    │  ② L1 答案缓存早期探测 ──► 命中直接返回    │
+                    │  ③ 多轮上下文改写（指代消解 + 实体记忆）   │
+                    │  ④ 意图识别与路由                         │
+                    │     政策标记 → 正则单号 → 关键词+LLM       │
+                    │  ⑤-A 精确查询 ──► PostgreSQL（归属校验）   │
+                    │  ⑤-B 知识类 RAG：                         │
+                    │      基础混合检索（BM25 ∥ Milvus → RRF）   │
+                    │        ├ 高置信 →【快速路径】Top-5 重排     │
+                    │        └ 否则 →【完整路径】Multi-Query+HyDE │
+                    │               → 多查询检索 → 重排 → 生成     │
+                    │  ⑥ 兜底/转人工（低置信度 / LLM 熔断）      │
+                    └───┬──────────────┬──────────────┬────────┘
+                        │              │              │
+                 ┌──────▼─────┐ ┌──────▼─────┐ ┌──────▼─────┐
+                 │  Redis 7   │ │ PostgreSQL │ │   Milvus   │
+                 │ 四级缓存    │ │ 订单/FAQ/   │ │ 向量索引    │
+                 │ + 会话      │ │ 问答日志    │ │ HNSW/COSINE│
+                 └────────────┘ └────────────┘ └────────────┘
+                        │              │              │
+                    ┌───▼──────────────▼──────────────▼───────┐
+                    │ 可观测性：Prometheus（20+ 指标）+ Grafana  │
+                    │ （15 面板）+ 8 条告警 + Loguru JSON 日志   │
+                    │ （request_id 贯穿 + 敏感信息脱敏）        │
+                    └──────────────────────────────────────────┘
+```
+
+## 功能清单
+
+| 模块 | 能力 | 关键实现 |
+|---|---|---|
+| F1 问答入口 | REST API + 零依赖 Web 聊天界面（`/`） | `POST /api/v1/chat`、`app/static/index.html` |
+| F2 意图识别 | 精确查询 vs 知识类，政策问法优先 | 政策标记 → 正则单号 → 关键词 + LLM few-shot → 默认知识类 |
+| F3 精确查询 | 订单/物流实时查询 + 越权拦截 | PostgreSQL 直查，非本人订单 403，30s 短缓存 |
+| F4 知识问答 | 混合检索 + 重排 + 生成 | BM25 ∥ Milvus(HNSW) → RRF(k=60) → Cross-Encoder → DeepSeek |
+| F5 多轮对话 | 指代消解 + 实体记忆 + 30 分钟会话 | Redis `session:{id}`（10 轮）+ 改写护栏 + 跨用户隔离 |
+| F6 转人工 | 手动转人工 + 低置信度自动建单 + Webhook 预留 | `POST /api/v1/handoff`、`handoff_tickets` |
+| F7 管理后台 | 问答日志 / 统计 / 工单只读接口 + 页面 | `GET /api/v1/admin/{logs,stats,handoffs}`、`/admin` |
+| 性能优化 | 四级缓存 + RAG 快速路径 + 缓存预热 | `rag:answer:`/`query_rewrite:`/`query_transform:`/`rerank:` |
+| 稳定性 | 四条降级链 + LLM 熔断 + 限流卸载 | Milvus→PG ILIKE；Redis→旁路；LLM→话术+转人工+熔断 |
+| 可观测性 | 指标 / 面板 / 告警 / 结构化日志 / 脱敏 | Prometheus + Grafana + 8 条告警 + loguru JSON |
+| 知识库运维 | 幂等导入（无重复文档）+ 缓存主动失效 | `ON CONFLICT (question) DO UPDATE` + Milvus 删旧插新 |
+| 部署 | 容器化全栈 9 服务一键编排 + Nginx 入口 | `Dockerfile` + `docker-compose.yml` + `nginx/nginx.conf` |
+
+## 核心指标速览
+
+| 维度 | 指标 | 实测 |
+|---|---|---|
+| 吞吐（N1） | 缓存命中型 / 纯精确查询 | **350 RPS** / 312 RPS（目标 >200） |
+| 并发（N5） | 500 并发 | 331 RPS，**0 个 5xx**（P99 3.6s→8.2s） |
+| 准确率（N4） | 意图 / 答案 / HTTP 状态 | **100%（62/62）** / **100%（78/78）** / 100% |
+| 延迟 | L1 命中 / 缓存复用 / 冷启动快速路径 | **2-7ms** / 550-890ms / 0.76-1.35s |
+| 缓存 | L1 命中率 / 快速路径占比 | **63.2%** / **49%** |
+| 容灾 | LLM 不可用降级 | 首次 61s → 后续 **0.2-0.6s** 响应兜底话术 + 自动转人工 |
+| 质量 | 单元测试 / 评测集 | **95 个** / 79 条 91 轮次 |
+
+> 明细：`docs/eval_report.md`（准确率与延迟）、`docs/loadtest_report.md`（压测与瓶颈定位）、
+> `docs/gap_audit.md`（需求逐条对照）、`docs/interview_qa.md`（面试问答手册）、`docs/environment_notes.md`（环境事故复盘）
+
 ## 技术栈
 
 | 层 | 选型 |
@@ -10,7 +90,7 @@
 | Web 框架 | FastAPI (async) + uvicorn |
 | LLM | DeepSeek API（OpenAI 兼容接口，经 LangChain ChatOpenAI 接入） |
 | 嵌入模型 | BAAI/bge-small-zh-v1.5（本地 CPU，512 维） |
-| 重排模型 | BAAI/bge-reranker-v2-m3（本地 CPU，Cross-Encoder） |
+| 重排模型 | BAAI/bge-reranker-base + int8 动态量化（本地 CPU，Cross-Encoder；16GB 内存下 v2-m3 会 OOM，`.env.local` 一行可换回） |
 | 向量库 | Milvus (HNSW + COSINE) |
 | 关系库 | PostgreSQL 15 + pgvector |
 | 缓存/会话 | Redis 7 |
@@ -60,6 +140,7 @@ monitoring/
 └── grafana/                 # 数据源与仪表盘自动配置 + rag-overview.json（15 面板）
 nginx/nginx.conf             # 反向代理 + 限流（20r/s，429）+ 统一入口日志
 docs/                        # eval_report.md / loadtest_report.md / production_plan.md
+                             # gap_audit.md（需求逐条对照）/ interview_qa.md（面试问答）/ environment_notes.md（事故复盘）
 data/faq/sample_faq.json     # 42 条示例 FAQ
 data/eval/eval_set.json      # N4 评测集
 tests/                       # 单元测试（86 个）
@@ -68,6 +149,23 @@ docker-compose.yml           # 全栈一键编排（app + nginx + Milvus + PG + 
 ```
 
 ## 快速开始
+
+**最短路径（本机开发，4 条命令 + 打开浏览器）**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\infra_up.ps1 -Keepalive    # ① 起 Milvus/PG/Redis 等基础设施
+.\.venv\Scripts\python.exe -m scripts.init_db                             # ② 建表 + 用户/订单种子数据
+.\.venv\Scripts\python.exe -m scripts.ingest_kb --file data\faq\sample_faq.json   # ③ FAQ 导入向量库
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000            # ④ 起服务
+# ⑤ 打开 http://localhost:8000/（聊天页）、http://localhost:8000/admin（管理页）、/docs（Swagger）
+```
+
+**生产式一键全栈**（含 app 镜像 + Nginx 入口 + 监控栈）：
+
+```powershell
+wsl -d Ubuntu -u root -e bash -lc "cd /mnt/d/AIagent/RAG-Agent && docker compose up -d"
+# 访问 http://localhost:8080（Nginx 统一入口，限流 20r/s）
+```
 
 ### 0. 前置条件
 
@@ -300,10 +398,11 @@ docker compose down                                # 停止（加 -v 清数据�
 | 意图识别准确率 | **100%**（62/62） | >90% ✅ |
 | 答案正确率 | **100%**（78/78） | >85% ✅ |
 | HTTP 状态符合率 | 100%（含 401/403/404/422） | — |
-| 延迟 | 平均 439ms / P50 489ms / P99 1512ms | — |
+| 延迟（冷缓存） | 平均 1154ms / P50 956ms / P95 2996ms / P99 3551ms | — |
+| 延迟（热缓存） | 平均 477ms / P50 482ms / P95 1419ms / P99 1631ms | — |
 
 评测集覆盖：精确查询 12 · 越权与无效实体 9 · 知识问答 36（含同义改写）· 多轮追问 12 · 异常输入 10。
-完整报告见 `docs/eval_report.md`。
+完整报告见 `docs/eval_report.md`（每轮用例的意图、来源、耗时与断言结果）。
 
 ### N1/N5 压测（Locust）
 
@@ -320,12 +419,14 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 
 | 画像 | 吞吐上限 | 说明 |
 |------|---------|------|
-| 缓存命中型 | **350 RPS** ✅ (N1>200) | P50 54ms@50 并发 |
-| 纯精确查询 | 312 RPS | PostgreSQL 未打满，全程 0 失败 |
-| 冷启动 RAG | 5 RPS | LLM + CPU 重排上限 |
-| 500 并发 | 331 RPS，0 个 5xx ✅ (N5) | P99 由 3.6s 劣化到 8.2s（排队） |
+| 缓存命中型 | **350 RPS** ✅ (N1>200) | P50 54ms / P99 970ms @50 并发，失败率 0.08%（均为越权 403） |
+| 纯精确查询 | 312 RPS | PostgreSQL 20 连接池未打满，全程 0 失败 |
+| 冷启动 RAG | 5 RPS | LLM 远程往返 + CPU 重排上限（延迟 2-3.7s，不随并发增长） |
+| 500 并发 | 331 RPS，0 个 5xx ✅ (N5) | P99 由 3.6s 劣化到 8.2s（排队，缺背压） |
 
-瓶颈定位与调优建议见 `docs/loadtest_report.md`。
+**压测同时抓到一个真实越权缺陷**：1172 个 403（跨用户会话实体泄漏）→ 三处收口 + 10 个回归测试，修复后归零。
+瓶颈定位（Web 层固定开销 ~3ms/请求、冷启动依赖饱和、内存约束、缺背压、L2/L4 命中率）与调优建议见
+`docs/loadtest_report.md`。
 
 ### 缓存预热（流程3）
 
@@ -425,5 +526,6 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 - [x] 阶段7：F7 管理后台只读 API + F1 极简 Web 聊天界面（+ 日志结构化与脱敏）
 - [x] 阶段8：Docker Compose 全栈一键部署（app/nginx 容器化 + 合并 compose）+ 生产扩展方案文档
 - [x] 阶段9：需求文档差距审计（`docs/gap_audit.md`）+ LLM 不可用降级（固定话术 + 自动转人工 + **熔断**）
-- [ ] 阶段10（待定）：LangSmith 链路追踪（网络可达后填 Key 即可）、Nginx 443/TLS、多副本运行时验证、
+- [x] 阶段10：求职收尾——架构图/功能清单/核心数据/简历亮点（README）+ 面试问答手册（`docs/interview_qa.md`）
+- [ ] 阶段11（待定）：LangSmith 链路追踪（网络可达后填 Key 即可）、Nginx 443/TLS、多副本运行时验证、
       管理后台写操作（工单认领/关闭）、方案书中的多模态与流式输出（超出需求文档范围）
