@@ -1,4 +1,6 @@
 """单元测试：意图识别（正则）、检索工具（tokenize/RRF）、多轮上下文改写。"""
+import json
+
 import pytest
 
 from app.services.intent import (
@@ -308,6 +310,107 @@ async def test_entity_memory_is_user_bound(monkeypatch):
     assert other["order_ids"] == []           # 他人不可见
 
 
+# ---- 第三阶段：日志脱敏 ----
+
+from app.core.masking import (  # noqa: E402
+    mask_address,
+    mask_email,
+    mask_id_card,
+    mask_phone,
+    mask_text,
+    mask_token,
+    safe_log_payload,
+)
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("13812345678", "138****5678"),
+        ("联系电话13900001111，备用13700002222", "联系电话139****1111，备用137****2222"),
+        ("没有号码", "没有号码"),
+    ],
+)
+def test_mask_phone(raw, expected):
+    assert mask_phone(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw, must_not_contain",
+    [
+        ("sk-abcdefghijklmnop1234", "abcdefghij"),
+        ("Bearer dev-token-change-me", "dev-token-change"),
+    ],
+)
+def test_mask_token(raw, must_not_contain):
+    masked = mask_token(raw)
+    assert must_not_contain not in masked
+    assert "****" in masked
+
+
+def test_mask_address_and_text():
+    addr = "广东省深圳市南山区科技园路1号A栋1201室"
+    masked = mask_address(addr)
+    assert "1201室" not in masked and "****" in masked
+
+    text = "客户张三 13812345678 住在北京市朝阳区建国路88号SOHO现代城3号楼"
+    out = mask_text(text)
+    assert "13812345678" not in out
+    assert "138****5678" in out
+
+
+def test_mask_email_and_id_card():
+    assert "user@example.com" not in mask_email("user@example.com")
+    assert "u***@example.com" == mask_email("user@example.com")
+    assert "11010119900307888X" not in mask_id_card("11010119900307888X")
+
+
+def test_safe_log_payload_recurses():
+    payload = {
+        "user": {"phone": "13812345678", "address": "广东省深圳市南山区科技园路1号A栋"},
+        "api_key": "sk-abcdefghijklmnop",
+        "question": "我的手机号是13800000000，请保密",
+        "items": [{"token": "Bearer abcdefghijklmn"}],
+    }
+    safe = safe_log_payload(payload)
+    dumped = json.dumps(safe, ensure_ascii=False)
+    assert "13812345678" not in dumped
+    assert "13800000000" not in dumped
+    assert "sk-abcdefghijklmnop" not in dumped
+    assert "abcdefghijklmn" not in dumped
+    assert safe["question"].startswith("我的手机号是138****0000")
+
+
+# ---- 第三阶段：管理后台模型与鉴权 ----
+
+def test_admin_models_defaults():
+    from app.models.admin import CacheStats, FeedbackStats, HandoffStats, LatencyStats
+
+    assert CacheStats().hit_rate is None          # Prometheus 不可用时为 None
+    assert HandoffStats().total == 0
+    assert FeedbackStats().positive_rate is None
+    assert LatencyStats().p99_ms == 0
+
+
+async def test_verify_admin_rejects_business_token(monkeypatch):
+    """管理接口必须使用 ADMIN_TOKEN，业务 API_TOKEN 应当被拒绝。"""
+    from app.api import deps
+    from app.core.errors import UnauthorizedError
+
+    class _Cred:
+        def __init__(self, token):
+            self.credentials = token
+
+    class _Req:
+        headers = {"authorization": "Bearer x"}
+
+    # 业务 token → 拒绝
+    with pytest.raises(UnauthorizedError):
+        await deps.verify_admin(_Req(), _Cred(deps.settings.api_token))
+    # 管理 token → 通过
+    await deps.verify_admin(_Req(), _Cred(deps.settings.admin_token))
+
+
 def test_strip_injected_entities():
     assert (
         _strip_injected_entities("订单 ORD20240100002 的退货运费由谁承担？")
@@ -331,6 +434,59 @@ async def test_classify_status_question_still_precise():
     res = await classify("我的订单 ORD20240100002 到哪了？")
     assert res["intent"] == "precise_query"
     assert res["method"] == "regex"
+
+
+async def test_classify_precise_without_entity_degrades_to_knowledge(monkeypatch):
+    """LLM 判为精确查询但问题里没有单号 → 降级走 FAQ，避免无意义的 400。"""
+
+    async def _precise():
+        return _FakeMsg('{"intent": "precise_query", "reason": "在问订单"}')
+
+    monkeypatch.setattr("app.services.intent.get_llm", lambda: _FakeLLM(_precise))
+    res = await classify("我的订单什么时候发货？")
+    assert res["entities"] == {"order_ids": [], "tracking_nos": []}
+    assert res["intent"] == "knowledge"
+    assert res["method"] == "llm_no_entity"
+
+
+async def test_classify_precise_with_entity_short_circuits_before_llm(monkeypatch):
+    """带单号的问题在第一层正则就返回，根本不会调用 LLM（也不受实体兜底影响）。"""
+
+    def _boom():
+        raise AssertionError("带单号时不应调用 LLM 分类")
+
+    monkeypatch.setattr("app.services.intent.get_llm", _boom)
+    res = await classify("帮我看看 ORD20240100007 现在什么情况")
+    assert res["intent"] == "precise_query"
+    assert res["method"] == "regex"
+
+
+def test_no_precise_query_route_without_entity():
+    """chat 路由不得在无单号时进入精确查询分支（源码级护栏）。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "app/api/routes/chat.py").read_text(encoding="utf-8")
+    assert "intent=precise_query 但无单号实体 -> 降级为 knowledge" in src
+
+
+def test_chat_data_carries_sources():
+    """F1 聊天界面需要的"答案依据"字段必须可序列化（且缺省为空也不报错）。"""
+    from app.models.chat import ChatData, SourceItem
+
+    data = ChatData(
+        answer="一般地区下单后48小时内发货", source="rag", confidence=0.82, session_id="s1",
+        sources=[{"faq_id": "faq_012", "question": "订单发货后多久能到？", "category": "物流", "score": 0.87}],
+    )
+    payload = json.loads(data.model_dump_json())
+    assert payload["sources"][0]["question"] == "订单发货后多久能到？"
+    assert payload["sources"][0]["score"] == 0.87
+
+    assert ChatData(answer="x", source="fallback", confidence=0.1, session_id="s").sources is None
+    assert SourceItem(faq_id="f1", question="q").category == ""
+
+    # 知识库里的 faq_id 是整数，必须能自动转成字符串（否则响应构造会抛校验错误）
+    assert SourceItem(faq_id=25, question="q").faq_id == "25"
 
 
 async def test_rewrite_guard_strips_entity_for_policy_question(monkeypatch, no_rewrite_cache):

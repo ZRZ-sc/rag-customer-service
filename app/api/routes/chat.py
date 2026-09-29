@@ -20,7 +20,7 @@ from app.core.metrics import (
     rag_query_total,
 )
 from app.db.postgres import get_pool
-from app.models.chat import ChatData, ChatRequest, ChatResponse
+from app.models.chat import ChatData, ChatRequest, ChatResponse, SourceItem
 from app.services import cache as cache_svc
 from app.services import conversation as conv_svc
 from app.services import precise_query
@@ -92,6 +92,12 @@ async def chat(
         # ---- 意图识别与路由（基于改写后的问题） ----
         intent_res = await classify(effective_question, history)
         intent = intent_res["intent"]
+        # 兜底：精确查询却没有可检索的单号时降级走知识库（防御性，classify 已处理）
+        if intent == "precise_query" and not (
+            intent_res["entities"]["order_ids"] or intent_res["entities"]["tracking_nos"]
+        ):
+            logger.info("intent=precise_query 但无单号实体 -> 降级为 knowledge")
+            intent = "knowledge"
         logger.info(
             "intent={} method={} entities={} rewritten={}",
             intent, intent_res["method"], intent_res["entities"], rewrite_res["applied"],
@@ -117,6 +123,12 @@ async def chat(
         data.latency_ms = latency_ms
         data.intent = intent
         data.request_id = request_id
+        # 知识类回答回传命中的 FAQ 条目，前端展示"答案依据"（缓存命中时无检索详情则为空）
+        if retrieval and retrieval.get("sources"):
+            try:
+                data.sources = [SourceItem(**s) for s in retrieval["sources"]]
+            except Exception as exc:  # 证据字段不影响主回答
+                logger.warning("build sources failed: {}", exc)
         if rewrite_res["applied"]:
             data.rewritten_question = effective_question
 

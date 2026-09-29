@@ -1,0 +1,17 @@
+# 构建上下文排除项（模型与虚拟环境体积大，通过卷挂载而非打进镜像）
+.git
+.gitignore
+.venv
+venv
+.tmp
+volumes
+models
+loadtest/results
+docs
+monitoring
+*.md
+.env
+.env.local
+__pycache__
+*.pyc
+.pytest_cache

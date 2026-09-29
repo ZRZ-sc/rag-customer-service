@@ -20,7 +20,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$composeFile = "docker-compose.monitoring.yml"
+$composeFile = "docker-compose.yml"      # 合并后的单一全栈编排；这里只启动监控子集
+$monitoringServices = "prometheus grafana"
 $targetFile = Join-Path $projectRoot "monitoring\prometheus\targets\windows-host.json"
 
 function Invoke-Wsl {
@@ -88,8 +89,8 @@ Write-Host "[monitoring] Windows 宿主机（WSL 网关）: $ip"
 Test-ScrapeTarget -Ip $ip -Port $AppPort | Out-Null
 Write-ScrapeTarget -Ip $ip -Port $AppPort
 
-Write-Host "[monitoring] 启动 Prometheus + Grafana ..."
-Invoke-Wsl "cd /mnt/d/AIagent/RAG-Agent && docker compose -f $composeFile up -d 2>&1 | tail -8"
+Write-Host "[monitoring] 启动 Prometheus + Grafana（合并 compose 中的监控子集）..."
+Invoke-Wsl "cd /mnt/d/AIagent/RAG-Agent && docker compose -f $composeFile up -d $monitoringServices 2>&1 | tail -8"
 
 Write-Host "[monitoring] 等待容器就绪 ..."
 for ($i = 0; $i -lt 30; $i++) {

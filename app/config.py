@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # ---- 认证 ----
     api_token: str = "dev-token-change-me"
+    admin_token: str = "admin-token-change-me"   # 管理后台（F7）只读接口专用
     auth_debug_log: bool = False           # 排查用：打印真实收到的 Authorization 头（明文，仅调试期开启）
 
     # ---- RAG 参数 ----
@@ -101,6 +102,7 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
     langsmith_project: str = "rag-customer-service"
+    prometheus_url: str = "http://localhost:9090"   # 管理后台统计增强（缓存命中率/快速路径占比）
 
     @property
     def pg_dsn(self) -> str:

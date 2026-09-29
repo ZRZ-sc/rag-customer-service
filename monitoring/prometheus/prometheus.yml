@@ -11,9 +11,21 @@ rule_files:
   - /etc/prometheus/alert-rules.yml
 
 scrape_configs:
-  # ---- FastAPI 应用指标 ----
-  # 目标地址由 scripts/monitoring_up.ps1 自动探测（WSL 默认网关 = Windows 宿主机）后写入
-  # targets/windows-host.json，Prometheus 通过 file_sd_configs 热加载，无需重启或改本文件。
+  # ---- 容器化部署（推荐）：应用在 compose 网络内，按服务名抓取 ----
+  - job_name: rag-api-docker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app:8000"]
+        labels:
+          service: rag-customer-service
+          env: docker
+  # 说明：本机 venv 直跑应用时（应用在 Windows 上），该目标会显示 down（DNS 解析不到 app），
+  #       属预期现象；此时请看下方 rag-api 任务。
+
+  # ---- 本机开发：应用跑在 Windows 宿主机上，抓取目标由脚本自动写入 ----
+  # scripts/monitoring_up.ps1 会探测 WSL 默认网关 IP（= Windows 宿主机）并写入
+  # targets/windows-host.json，Prometheus 通过 file_sd_configs 热加载，
+  # 无需重启或改本文件。
   - job_name: rag-api
     metrics_path: /metrics
     scheme: http

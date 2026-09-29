@@ -15,12 +15,14 @@ venv/
 *.local
 
 # Model caches (local torch models are large)
-models/
+# 注意：必须锚定到仓库根目录。写成不带前导斜杠的 `models/` 会连带忽略 app/models/
+# （Pydantic 模型包），导致克隆出来的仓库缺少该包、服务直接起不来。
+/models/
 ~/.cache/huggingface/
 
 # Data / volumes
-data/volumes/
-volumes/
+/data/volumes/
+/volumes/
 
 # IDE
 .idea/

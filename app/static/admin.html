@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理后台 · RAG 智能客服</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--line:#e5e7eb;--text:#1f2328;--muted:#6b7280;
+        --brand:#2563eb;--ok:#059669;--warn:#d97706;--err:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--text)}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 18px;
+         display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0}
+  .spacer{flex:1}
+  input,select,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
+  button{cursor:pointer;background:var(--card)}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  main{padding:18px;max-width:1280px;margin:0 auto}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+  h2{font-size:15px;margin:0 0 12px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .card{background:#fafbfc;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .card .k{font-size:12px;color:var(--muted)}
+  .card .v{font-size:20px;font-weight:600;margin-top:2px}
+  .bars{margin-top:12px;display:grid;gap:8px}
+  .bar{display:flex;align-items:center;gap:8px;font-size:12px}
+  .bar .name{width:120px;color:var(--muted)}
+  .bar .track{flex:1;height:10px;background:#eef1f4;border-radius:6px;overflow:hidden}
+  .bar .fill{height:100%;background:var(--brand)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;background:#fafbfc;position:sticky;top:0}
+  td.q{max-width:280px;word-break:break-word}
+  .tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;border:1px solid var(--line)}
+  .tag.db{background:#ecfdf5;color:var(--ok);border-color:#a7f3d0}
+  .tag.rag{background:#eff6ff;color:var(--brand);border-color:#bfdbfe}
+  .tag.fb{background:#fffbeb;color:var(--warn);border-color:#fde68a}
+  .tag.pending{background:#fffbeb;color:var(--warn);border-color:#fde68a}
+  .tag.closed{background:#f3f4f6;color:var(--muted)}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .pager{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;color:var(--muted)}
+  .scroll{max-height:460px;overflow:auto}
+  .empty{color:var(--muted);padding:14px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 管理后台（只读）</h1>
+  <span class="spacer"></span>
+  <input id="token" placeholder="ADMIN_TOKEN" style="width:210px" type="password">
+  <select id="win">
+    <option value="15">近 15 分钟</option>
+    <option value="60" selected>近 1 小时</option>
+    <option value="1440">近 24 小时</option>
+    <option value="10080">近 7 天</option>
+  </select>
+  <button class="primary" onclick="loadAll()">刷新</button>
+  <a href="/"><button>返回聊天</button></a>
+  <a href="/docs"><button>API 文档</button></a>
+</header>
+
+<main>
+  <section>
+    <h2>概览统计</h2>
+    <div class="cards" id="cards"></div>
+    <div class="bars" id="bars"></div>
+  </section>
+
+  <section>
+    <h2>问答日志</h2>
+    <div class="filters">
+      <input id="f_user" placeholder="user_id" style="width:130px">
+      <select id="f_intent"><option value="">全部意图</option><option>precise_query</option><option>knowledge</option><option>other</option></select>
+      <select id="f_source"><option value="">全部来源</option><option>database</option><option>rag</option><option>fallback</option></select>
+      <button onclick="page=1;loadLogs()">查询</button>
+    </div>
+    <div class="scroll">
+      <table><thead><tr>
+        <th>时间</th><th>用户</th><th>问题</th><th>答案</th><th>意图</th><th>来源</th>
+        <th>置信度</th><th>耗时</th><th>反馈</th>
+      </tr></thead><tbody id="logs"></tbody></table>
+    </div>
+    <div class="pager" id="logsPager"></div>
+  </section>
+
+  <section>
+    <h2>转人工工单</h2>
+    <div class="filters">
+      <select id="h_status"><option value="">全部状态</option><option>pending</option><option>accepted</option><option>closed</option></select>
+      <select id="h_source"><option value="">全部来源</option><option>auto</option><option>manual</option></select>
+      <button onclick="hpage=1;loadHandoffs()">查询</button>
+    </div>
+    <div class="scroll">
+      <table><thead><tr>
+        <th>工单号</th><th>时间</th><th>来源</th><th>优先级</th><th>状态</th><th>用户</th><th>原因/问题</th>
+      </tr></thead><tbody id="handoffs"></tbody></table>
+    </div>
+    <div class="pager" id="handoffsPager"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let page = 1, hpage = 1;
+const token = () => $('token').value.trim();
+const H = () => ({'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json'});
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtTime = (s) => s ? String(s).replace('T',' ').slice(5,19) : '-';
+const pct = (v) => (v == null ? '-' : (v*100).toFixed(1) + '%');
+
+$('token').value = localStorage.getItem('rag_admin_token') || '';
+$('token').addEventListener('change', () => localStorage.setItem('rag_admin_token', token()));
+
+function bars(el, obj){
+  const entries = Object.entries(obj || {});
+  const max = Math.max(1, ...entries.map(([,v]) => v));
+  el.innerHTML = entries.length ? entries.map(([k,v]) =>
+    `<div class="bar"><span class="name">${esc(k)}</span>
+       <span class="track"><span class="fill" style="width:${(v/max*100).toFixed(1)}%"></span></span>
+       <span>${v}</span></div>`).join('') : '<div class="empty">暂无数据</div>';
+}
+
+async function loadStats(){
+  const r = await fetch(`/api/v1/admin/stats?window_minutes=${$('win').value}`, {headers: H()});
+  const body = await r.json();
+  if (r.status !== 200){ $('cards').innerHTML = `<div class="empty">鉴权失败或接口错误：${esc(body.message||r.status)}</div>`; return; }
+  const d = body.data;
+  const cards = [
+    ['总请求', d.total_requests], ['QPS', d.qps],
+    ['P50 延迟', d.latency.p50_ms + 'ms'], ['P95 延迟', d.latency.p95_ms + 'ms'],
+    ['P99 延迟', d.latency.p99_ms + 'ms'], ['平均延迟', d.latency.avg_ms + 'ms'],
+    ['缓存命中率', pct(d.cache.hit_rate)], ['快速路径占比', pct(d.cache.fast_path_ratio)],
+    ['转人工工单', d.handoffs.total + `（待处理 ${d.handoffs.pending}）`],
+    ['自动转人工', d.handoffs.auto], ['手工转人工', d.handoffs.manual],
+    ['点赞/点踩', `${d.feedback.up} / ${d.feedback.down}`],
+    ['正向反馈率', pct(d.feedback.positive_rate)], ['Token 消耗', d.tokens_total],
+  ];
+  $('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+  bars($('bars'), Object.fromEntries([
+    ...Object.entries(d.by_source).map(([k,v]) => ['来源 · ' + k, v]),
+    ...Object.entries(d.by_intent).map(([k,v]) => ['意图 · ' + k, v]),
+  ]));
+}
+
+async function loadLogs(){
+  const p = new URLSearchParams({page, page_size: 20});
+  if ($('f_user').value.trim()) p.set('user_id', $('f_user').value.trim());
+  if ($('f_intent').value) p.set('intent', $('f_intent').value);
+  if ($('f_source').value) p.set('source', $('f_source').value);
+  const r = await fetch('/api/v1/admin/logs?' + p, {headers: H()});
+  const body = await r.json();
+  if (r.status !== 200){ $('logs').innerHTML = `<tr><td colspan="9" class="empty">${esc(body.message||r.status)}</td></tr>`; return; }
+  const d = body.data;
+  $('logs').innerHTML = d.items.length ? d.items.map(it => {
+    const cls = it.source === 'database' ? 'db' : (it.source === 'rag' ? 'rag' : 'fb');
+    const fb = it.feedback === 1 ? '👍' : (it.feedback === -1 ? '👎' : '-');
+    return `<tr>
+      <td>${fmtTime(it.created_at)}</td>
+      <td>${esc(it.user_id)}</td>
+      <td class="q">${esc(it.question)}${it.rewritten_question ? `<div style="color:#6b7280">↳ ${esc(it.rewritten_question)}</div>` : ''}</td>
+      <td class="q">${esc(it.answer)}</td>
+      <td>${esc(it.intent)}</td>
+      <td><span class="tag ${cls}">${esc(it.source)}</span></td>
+      <td>${it.confidence != null ? Number(it.confidence).toFixed(3) : '-'}</td>
+      <td>${it.latency_ms ?? '-'}ms</td>
+      <td>${fb}</td></tr>`;
+  }).join('') : '<tr><td colspan="9" class="empty">暂无数据</td></tr>';
+  $('logsPager').innerHTML = `共 ${d.total} 条 · 第 ${d.page}/${d.pages || 1} 页
+    <button onclick="if(page>1){page--;loadLogs()}">上一页</button>
+    <button onclick="if(page<${d.pages}){page++;loadLogs()}">下一页</button>`;
+}
+
+async function loadHandoffs(){
+  const p = new URLSearchParams({page: hpage, page_size: 20});
+  if ($('h_status').value) p.set('status', $('h_status').value);
+  if ($('h_source').value) p.set('source', $('h_source').value);
+  const r = await fetch('/api/v1/admin/handoffs?' + p, {headers: H()});
+  const body = await r.json();
+  if (r.status !== 200){ $('handoffs').innerHTML = `<tr><td colspan="7" class="empty">${esc(body.message||r.status)}</td></tr>`; return; }
+  const d = body.data;
+  $('handoffs').innerHTML = d.items.length ? d.items.map(it => `<tr>
+      <td>${esc(it.ticket_id)}</td>
+      <td>${fmtTime(it.created_at)}</td>
+      <td><span class="tag ${it.source === 'auto' ? 'rag' : 'db'}">${esc(it.source)}</span></td>
+      <td>${esc(it.priority)}</td>
+      <td><span class="tag ${esc(it.status)}">${esc(it.status)}</span></td>
+      <td>${esc(it.user_id)}</td>
+      <td class="q">${esc(it.reason)}${it.last_question ? `<div style="color:#6b7280">Q: ${esc(it.last_question)}</div>` : ''}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">暂无数据</td></tr>';
+  $('handoffsPager').innerHTML = `共 ${d.total} 条 · 第 ${d.page}/${d.pages || 1} 页
+    <button onclick="if(hpage>1){hpage--;loadHandoffs()}">上一页</button>
+    <button onclick="if(hpage<${d.pages}){hpage++;loadHandoffs()}">下一页</button>`;
+}
+
+function loadAll(){ loadStats(); loadLogs(); loadHandoffs(); }
+if (token()) loadAll();
+</script>
+</body>
+</html>

@@ -126,6 +126,11 @@ async def classify(question: str, history: list[dict] | None = None) -> dict:
     # 第二层：关键词信号 → LLM few-shot 确认
     if has_precise_signal(question, entities):
         intent = await _classify_with_llm(question, history)
+        # 实体兜底：判定为精确查询但既无订单号也无物流单号时，精确查询根本无法执行
+        # （数据库按单号检索）。这类问题通常问的是"发货时效/查询方式"等政策，
+        # 应降级走 FAQ 检索，而不是把"我的订单什么时候发货？"直接判成 400。
+        if intent == "precise_query" and not (entities["order_ids"] or entities["tracking_nos"]):
+            return {"intent": "knowledge", "entities": entities, "method": "llm_no_entity"}
         return {"intent": intent, "entities": entities, "method": "llm"}
 
     # 无信号：默认知识类

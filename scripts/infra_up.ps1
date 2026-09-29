@@ -11,7 +11,8 @@ param(
     [switch]$Keepalive
 )
 
-$compose = "docker-compose.infra.yml"
+$compose = "docker-compose.yml"      # 合并后的单一全栈编排；这里只启动中间件子集
+$infraServices = "etcd minio milvus postgres redis"
 $ubuntu = "Ubuntu"
 
 function Invoke-Wsl {
@@ -67,7 +68,7 @@ if ($Status) {
 Write-Host "[infra] ensuring docker daemon in WSL..."
 Invoke-Wsl "systemctl enable docker >/dev/null 2>&1; systemctl start docker; sleep 3"
 Write-Host "[infra] starting containers (registry mirror: dockerproxy.net)..."
-Invoke-Wsl "cd /mnt/d/AIagent/RAG-Agent && docker compose -f $compose up -d 2>&1 | tail -6"
+Invoke-Wsl "cd /mnt/d/AIagent/RAG-Agent && docker compose -f $compose up -d $infraServices 2>&1 | tail -6"
 Invoke-Wsl "docker update --restart unless-stopped rag-etcd rag-minio rag-milvus rag-postgres rag-redis >/dev/null 2>&1"
 Write-Host "[infra] waiting for healthy..."
 for ($i = 0; $i -lt 30; $i++) {

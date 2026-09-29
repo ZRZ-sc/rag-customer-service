@@ -22,14 +22,15 @@
 
 ```
 app/
-├── main.py                  # FastAPI 入口（lifespan、中间件、异常处理）
+├── main.py                  # FastAPI 入口（lifespan、结构化访问日志、异常处理、静态页）
 ├── config.py                # pydantic-settings 配置（.env / .env.local）
 ├── api/
-│   ├── deps.py              # HTTPBearer 认证（Swagger Authorize 可用）
-│   └── routes/              # chat / health
-├── core/                    # 错误码、结构化日志(UTF-8 JSON)、Prometheus 指标
+│   ├── deps.py              # HTTPBearer 认证（业务 token / ADMIN_TOKEN 双通道）
+│   └── routes/              # chat / support / admin / health
+├── core/                    # 错误码、结构化日志(UTF-8 JSON)、Prometheus 指标、**脱敏 masking**
 ├── db/                      # PostgreSQL(asyncpg) / Redis / Milvus 客户端（含自愈）
 ├── models/                  # 请求/响应 Pydantic 模型
+├── static/                  # 零依赖前端：index.html（聊天）/ admin.html（管理后台）
 └── services/
     ├── llm.py               # DeepSeek 客户端
     ├── embeddings.py        # bge 本地向量化（含启动预热）
@@ -37,23 +38,33 @@ app/
     ├── query_rewrite.py     # 多轮指代消解（LLM 改写 + 实体记忆兜底 + 政策护栏，24h 缓存）
     ├── precise_query.py     # 精确查询（含归属校验）
     ├── cache.py             # 四级缓存：答案 / 改写 / 扩展 / 重排
+    ├── cache_warmup.py      # 缓存预热（脚本 + 启动预热共用）
     ├── conversation.py      # 多轮会话 + 会话实体记忆（Redis，30 分钟过期）
+    ├── rate_limit.py        # Redis 令牌桶限流（Lua 原子扣减，fail-open）
+    ├── support.py           # F6 转人工工单 + 用户反馈
     └── rag/                 # query_transform / retriever / reranker / pipeline（快速路径）
 scripts/
 ├── init_db.py               # 建表 + 种子数据（用户/商品/订单）
-├── ingest_kb.py             # FAQ → PG → 向量化 → Milvus → 清缓存
+├── ingest_kb.py             # FAQ → PG（ON CONFLICT 幂等）→ 向量化 → Milvus → 清缓存
+├── build_eval_set.py        # 生成 N4 评测集（79 条 / 91 轮次）
+├── eval_accuracy.py         # 准确率评测 → docs/eval_report.md
+├── warmup_cache.py          # 缓存预热（高频清单 / 全量）
 ├── download_models_modelscope.py  # 从 ModelScope 预下载本地模型
 ├── infra_up.ps1             # 基础设施启停（含 WSL 保活）
 ├── monitoring_up.ps1        # 监控栈启停（自动写入抓取目标）
 ├── latency_test.py          # 延迟测试（冷启动 / 各级缓存命中对比）
 └── traffic_demo.py          # 流量演示（点亮 Grafana 仪表盘）
+loadtest/                    # Locust 压测（cache / precise / rag 三套画像 + 汇总脚本）
 monitoring/
 ├── prometheus/              # prometheus.yml、alert-rules.yml、targets/
-└── grafana/                 # 数据源与仪表盘自动配置 + rag-overview.json
+└── grafana/                 # 数据源与仪表盘自动配置 + rag-overview.json（15 面板）
+nginx/nginx.conf             # 反向代理 + 限流（20r/s，429）+ 统一入口日志
+docs/                        # eval_report.md / loadtest_report.md / production_plan.md
 data/faq/sample_faq.json     # 42 条示例 FAQ
-tests/                       # 单元测试（48 个）
-docker-compose.infra.yml     # Milvus + PG + Redis 基础设施
-docker-compose.monitoring.yml# Prometheus + Grafana 监控栈
+data/eval/eval_set.json      # N4 评测集
+tests/                       # 单元测试（86 个）
+Dockerfile                   # 应用镜像（python:3.12-slim + CPU torch，非 root + tini）
+docker-compose.yml           # 全栈一键编排（app + nginx + Milvus + PG + Redis + 监控）
 ```
 
 ## 快速开始
@@ -76,8 +87,8 @@ python -m venv .venv
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\infra_up.ps1 -Keepalive   # 一键启动（含 WSL 保活，窗口需保持打开）
-# 等价手动方式：
-# docker compose -f docker-compose.infra.yml up -d
+# 等价手动方式（全栈 compose 里只起基础设施这几个服务）：
+# docker compose up -d etcd minio milvus postgres redis
 ```
 
 ### 3. 初始化数据
@@ -99,6 +110,7 @@ powershell -ExecutionPolicy Bypass -File scripts\infra_up.ps1 -Keepalive   # 一
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
 # Prometheus http://localhost:9090    Grafana http://localhost:3000 (admin / admin123)
+# 等价手动方式：docker compose up -d prometheus grafana
 ```
 
 ### 6. 调用
@@ -120,6 +132,44 @@ curl -X POST http://localhost:8000/api/v1/chat -H "Authorization: Bearer dev-tok
 curl http://localhost:8000/metrics
 ```
 
+## Web 界面（零依赖静态页）
+
+服务自带两个单文件页面（原生 HTML/JS，无需 npm 构建，随服务一起发布）：
+
+| 页面 | 地址 | 能力 |
+|------|------|------|
+| 聊天界面（F1） | http://localhost:8000/ | 会话/用户 ID（localStorage 记忆）、示例问题一键填充、来源徽标（database/rag/fallback）+ 意图/置信度/延迟/Token、**参考知识条目折叠（FAQ 问题 + 重排分数）**、改写问题折叠展示、转人工工单号、👍/👎 反馈 |
+| 管理后台（F7） | http://localhost:8000/admin | ADMIN_TOKEN 登录（仅存 sessionStorage）、统计卡片（QPS/延迟/来源与意图分布/转人工/反馈）、命中率与快速路径、问答日志分页检索、工单列表 |
+
+`/admin` 页面直接调用下表的只读管理 API；页面里的 token 输入框填 `.env` 的 `ADMIN_TOKEN`（默认 `admin-token-change-me`，**上线前必须改**）。
+
+## 管理后台只读 API（F7）
+
+> 鉴权独立：`Authorization: Bearer <ADMIN_TOKEN>`；业务 token 无效（返回 401）。
+
+| 接口 | 说明 | 主要参数 |
+|------|------|---------|
+| `GET /api/v1/admin/logs` | 问答日志分页 + 过滤 | `page` `page_size`(≤100) `user_id` `session_id` `intent` `source` `start` `end` |
+| `GET /api/v1/admin/handoffs` | 转人工工单分页 + 过滤 | `page` `page_size` `status` `source` `user_id` `start` `end` |
+| `GET /api/v1/admin/stats` | 统计聚合 | `window_minutes`(默认 60，≤10080) |
+
+`stats` 返回：请求总量/QPS、来源与意图分布、状态码分布、延迟分位（avg/p50/p95/p99/max）、Token 消耗、转人工（总数/待处理/自动/手动）、反馈（赞/踩/好评率）、缓存命中率与快速路径占比。
+数据库聚合来自 PostgreSQL；命中率/快速路径优先读 Prometheus（`PROMETHEUS_URL`），不可达时自动降级为 0 且不影响其余字段。
+
+```powershell
+$H = @{ Authorization = "Bearer admin-token-change-me" }
+curl -H $H "http://localhost:8000/api/v1/admin/stats?window_minutes=60"
+curl -H $H "http://localhost:8000/api/v1/admin/logs?intent=knowledge&page_size=5"
+curl -H $H "http://localhost:8000/api/v1/admin/handoffs?status=pending"
+```
+
+## 日志结构化与脱敏
+
+- 访问日志为单行 JSON（loguru `serialize=True`）：`event=http_access` + `service/method/path/status/duration_ms/client/query/user_agent/request_id`，可直接被 Loki/ELK 解析
+- 业务日志带 `request_id` 贯穿一次请求，便于串联
+- **脱敏**（`app/core/masking.py`）：手机号、座机、邮箱、身份证、收货地址、`sk-*`/Bearer/JWT 令牌在落日志前统一替换，`safe_log_payload()` 递归处理嵌套结构；鉴权模块打印 token 时同样只保留首尾各 4 位（如 `dev-…me(len=19)`）
+- 日志级别、是否落业务问答日志由 `LOG_LEVEL` / `DIALOGUE_LOG_ENABLED` 控制
+
 ## API 一览
 
 | 接口 | 说明 | 备注 |
@@ -128,8 +178,12 @@ curl http://localhost:8000/metrics
 | `POST /api/v1/handoff` | **转人工（创建工单）** | 用户主动请求人工；返回 ticket_id、排队提示 |
 | `GET /api/v1/handoff/{ticket_id}` | 查询工单状态 | pending / accepted / closed |
 | `POST /api/v1/feedback` | **点赞 / 点踩** | 用 `request_id` 定位问答记录；含归属校验 |
+| `GET /api/v1/admin/logs` | 问答日志（只读） | 需 `ADMIN_TOKEN`，分页 + 多维过滤 |
+| `GET /api/v1/admin/handoffs` | 工单列表（只读） | 需 `ADMIN_TOKEN`，分页 + 状态/来源过滤 |
+| `GET /api/v1/admin/stats` | 统计聚合（只读） | 需 `ADMIN_TOKEN`，窗口内 QPS/延迟/分布/反馈 |
 | `GET /health` `/ready` | 存活 / 就绪探针 | `/ready` 检查 PG、Redis、Milvus、LLM |
 | `GET /metrics` | Prometheus 指标 | 不在 OpenAPI 文档中 |
+| `GET /` `/admin` | 聊天页 / 管理页 | 静态单文件前端 |
 
 **转人工（F6）两种触发方式**：
 1. 用户主动：`POST /api/v1/handoff`（可带 reason / last_question / priority）
@@ -196,6 +250,35 @@ powershell -ExecutionPolicy Bypass -File scripts\monitoring_up.ps1
 4. 也可用命令行批量造流量：`.\.venv\Scripts\python.exe -m scripts.traffic_demo --rounds 20 --concurrency 4`
 
 > 注意：监控栈与主服务相互独立。主服务停止时 Prometheus 目标会变为 down，会触发 `RagServiceDown` 告警。
+
+## 全栈容器化部署（app + nginx + 依赖 + 监控）
+
+单个 `docker-compose.yml` 编排 9 个服务：`etcd / minio / milvus / postgres / redis / app / nginx / prometheus / grafana`。
+
+```powershell
+# 全栈启动（首次会自动构建 app 镜像：CPU torch + 依赖，约 10-20 分钟）
+wsl -d Ubuntu -u root -e bash -lc "cd /mnt/d/AIagent/RAG-Agent && docker compose up -d"
+
+# 只起基础设施 / 只起监控（开发模式：app 在 Windows 上跑，便于热重载）
+docker compose up -d etcd minio milvus postgres redis
+docker compose up -d prometheus grafana
+
+docker compose ps                                  # 查看状态
+docker compose logs -f app                         # 跟踪应用日志
+docker compose down                                # 停止（加 -v 清数据卷）
+```
+
+| 入口 | 地址 | 说明 |
+|------|------|------|
+| Nginx 统一入口 | http://localhost:8080 | 反代 `app:8000`，`/api/v1/chat` 限流 20r/s（burst 40，超限 **429**）、其余 API 60r/s |
+| 应用直连 | http://localhost:8000 | 容器内应用端口（调试用） |
+| Grafana / Prometheus | http://localhost:3000 / http://localhost:9090 | 监控栈 |
+
+- `nginx/nginx.conf` 的 upstream 已预留多副本注释：扩容时只需 `docker compose up -d --scale app=2` 并取消注释
+- `/metrics` 在 Nginx 层**仅允许内网**访问（`allow 172.16.0.0/12; deny all;`）
+- 容器内模型通过卷挂载 `./models:/srv/models:ro` 复用宿主机已下载的模型，无需重新下载
+- 镜像特性：非 root 用户、`tini` 作 init（正确回收信号）、内置 `HEALTHCHECK`
+- 生产扩展方案（多副本、GPU 重排、vLLM、K8s、灰度与容量规划）见 `docs/production_plan.md`
 
 ## 质量保障：评测 / 压测 / 缓存预热
 
@@ -276,11 +359,13 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 | Milvus 故障 | 降级为 PostgreSQL ILIKE 全文检索 |
 | Redis 故障 | 跳过缓存/会话，直连 PG + 完整 RAG |
 | PostgreSQL 故障 | 500 + 错误日志与告警 |
+| 判为精确查询但问题里没有单号 | 降级走 FAQ 检索（"我的订单什么时候发货？"这类问题由知识库回答，而非报 400） |
 
 ## 验证测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest                      # 单元测试（48 个）
+.\.venv\Scripts\python.exe -m pytest                      # 单元测试（86 个）
+.\.venv\Scripts\python.exe -m scripts.eval_accuracy       # 端到端准确率评测（79 条 / 91 轮次）
 .\.venv\Scripts\python.exe -m scripts.latency_test        # 延迟测试（冷启动/缓存命中对比）
 .\.venv\Scripts\python.exe -m scripts.traffic_demo        # 流量演示（点亮监控面板）
 ```
@@ -317,6 +402,7 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 - [x] 阶段3：四级缓存优化 + RAG 快速路径（缓存复用 <1s）
 - [x] 阶段4：可观测性集成（Prometheus + Grafana 15 面板 + 6 条告警规则）
 - [x] 阶段5：知识库幂等更新（修重复插入缺陷）+ 429 限流 + F6 转人工 + 反馈 API
-- [ ] 阶段6：评测集与准确率量化（N4）+ 压测（N1/N5）+ 缓存预热脚本
-- [ ] 阶段7：管理后台 API（F7：问答日志与统计查询）
-- [ ] 阶段8：Docker Compose 全栈一键部署（含 app/nginx 容器化）
+- [x] 阶段6：评测集与准确率量化（N4：意图 100% / 答案 100%）+ 压测（N1/N5）+ 缓存预热脚本
+- [x] 阶段7：F7 管理后台只读 API + F1 极简 Web 聊天界面（+ 日志结构化与脱敏）
+- [x] 阶段8：Docker Compose 全栈一键部署（app/nginx 容器化 + 合并 compose）+ 生产扩展方案文档
+- [ ] 阶段9（待定）：LangSmith 链路追踪（当前网络不可达，已用 Prometheus + request_id 串联替代）、管理后台写操作（工单认领/关闭）、多副本运行时验证

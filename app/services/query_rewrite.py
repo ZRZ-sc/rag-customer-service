@@ -20,6 +20,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import settings
 from app.core.logging import logger
+from app.core.masking import mask_text
 from app.core.metrics import context_rewrite_total, context_rewrite_duration
 from app.services import cache as cache_svc
 from app.services.intent import (
@@ -167,7 +168,7 @@ def _apply_guards(question: str, rewritten: str, method: str) -> tuple[str, str]
     if has_knowledge_marker(question):
         stripped = _strip_injected_entities(rewritten)
         if stripped != rewritten:
-            logger.info("query rewrite guard(policy) | {!r} -> {!r}", rewritten, stripped)
+            logger.info("query rewrite guard(policy) | {!r} -> {!r}", mask_text(rewritten), mask_text(stripped))
             rewritten = stripped
             method = method if method.endswith("policy_guard") else f"{method}+policy_guard"
 
@@ -175,7 +176,7 @@ def _apply_guards(question: str, rewritten: str, method: str) -> tuple[str, str]
     if not (orig_ents["order_ids"] or orig_ents["tracking_nos"]) and not has_status_intent(question):
         stripped = _strip_injected_entities(rewritten)
         if stripped != rewritten:
-            logger.info("query rewrite guard(no-status-intent) | {!r} -> {!r}", rewritten, stripped)
+            logger.info("query rewrite guard(no-status-intent) | {!r} -> {!r}", mask_text(rewritten), mask_text(stripped))
             rewritten = stripped
             method = method if method.endswith("entity_guard") else f"{method}+entity_guard"
     return rewritten, method
@@ -234,7 +235,7 @@ async def rewrite_query(
             )
         context_rewrite_total.labels(applied="true", method=f"{method}+cache").inc()
         result.update(rewritten=safe, applied=True, method=method, cached=True)
-        logger.info("query rewrite cache HIT | original={!r} -> rewritten={!r}", question, safe)
+        logger.info("query rewrite cache HIT | original={!r} -> rewritten={!r}", mask_text(question), mask_text(safe))
         return result
 
     t0 = time.perf_counter()
@@ -293,6 +294,7 @@ async def rewrite_query(
         )
 
     logger.info(
-        "query rewritten | original={!r} -> rewritten={!r} method={}", question, rewritten, method
+        "query rewritten | original={!r} -> rewritten={!r} method={}",
+        mask_text(question), mask_text(rewritten), method,
     )
     return result

@@ -4,17 +4,21 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
 from app.api.routes.support import router as support_router
+from app.api.routes.admin import router as admin_router
 from app.config import settings
 from app.core.errors import ApiError
 from app.core.logging import logger, request_id_var, setup_logging, trace_id_var
+from app.core.masking import mask_text
 from app.core.metrics import metrics_response
 from app.db import milvus, postgres, redis
 from app.services.rag.retriever import hybrid_retriever
@@ -120,21 +124,37 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
+    """访问日志：JSON 结构化字段（service / duration_ms / status 等），并做敏感信息脱敏。"""
     rid = uuid.uuid4().hex[:16]
     request_id_var.set(rid)
     trace_id_var.set(rid)
     t0 = time.perf_counter()
+    status_code = 500
     try:
         response = await call_next(request)
-    except Exception:
-        logger.info("{} {} -> 500 ({:.0f}ms)", request.method, request.url.path, (time.perf_counter() - t0) * 1000)
-        raise
-    response.headers["X-Request-ID"] = rid
-    logger.info(
-        "{} {} -> {} ({:.0f}ms)",
-        request.method, request.url.path, response.status_code, (time.perf_counter() - t0) * 1000,
-    )
-    return response
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        path = request.url.path
+        query = request.url.query
+        # 结构化字段：loguru serialize=True 会把 bind 的字段并入 JSON 的 extra
+        log = logger.bind(
+            event="http_access",
+            service=settings.app_name,
+            method=request.method,
+            path=path,
+            status=status_code,
+            duration_ms=round((time.perf_counter() - t0) * 1000, 1),
+            client=request.client.host if request.client else "-",
+            query=mask_text(query) if query else "",
+            user_agent=(request.headers.get("user-agent") or "")[:80],
+        )
+        # 探针/指标抓取避免刷屏
+        if path in ("/metrics", "/health", "/ready"):
+            log.debug("http_access")
+        else:
+            log.info("http_access")
 
 
 @app.exception_handler(ApiError)
@@ -156,7 +176,21 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
 
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(support_router)          # /api/v1/handoff、/api/v1/feedback（自带前缀）
+app.include_router(admin_router)            # /api/v1/admin/*（管理后台，ADMIN_TOKEN 鉴权）
 app.include_router(health_router)
+
+# ---- 静态资源：极简 Web 聊天界面（F1）与管理后台页面（F7） ----
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def index_page():
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    @app.get("/admin", include_in_schema=False)
+    async def admin_page():
+        return FileResponse(_STATIC_DIR / "admin.html")
 
 
 @app.get("/metrics", include_in_schema=False)
