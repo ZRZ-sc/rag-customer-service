@@ -66,3 +66,25 @@ groups:
         annotations:
           summary: "服务错误速率升高"
           description: "近 5 分钟错误速率 {{ $value }}/s，请检查 PostgreSQL / Milvus / DeepSeek 依赖"
+
+  - name: rag-api-llm
+    rules:
+      # LLM 熔断打开：接口本身仍是 200（返回兜底话术 + 自动转人工），
+      # 因此错误率告警不会触发，必须单独用 llm_failure_total 看护（需求文档流程6/N8）
+      - alert: RagLlmCircuitOpen
+        expr: increase(llm_failure_total{stage=~".*:circuit_open"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM 熔断已打开，问答降级为兜底话术"
+          description: "近 5 分钟出现 {{ $value }} 次熔断短路，请检查 DeepSeek API 可用性与额度"
+
+      - alert: RagLlmFailureRate
+        expr: increase(llm_failure_total{stage!~".*:circuit_open"}[10m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用失败次数偏高"
+          description: "近 10 分钟真实失败 {{ $value }} 次（超时/连接错误），可能即将触发熔断"

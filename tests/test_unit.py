@@ -35,6 +35,31 @@ class _FakeLLM:
     async def ainvoke(self, _messages):
         return await self._handler()
 
+def _patch_llm(monkeypatch, llm) -> None:
+    """把 LLM 替身接到唯一接缝 app.services.llm.get_llm。
+
+    所有调用点都经 app.services.llm.ainvoke（带熔断），它内部调用 get_llm()；
+    同时重置熔断状态，避免上一个用例的失败计数影响本用例。
+    """
+    from app.services import llm as llm_mod
+
+    llm_mod.breaker.reset()
+    if hasattr(llm, "ainvoke"):
+        monkeypatch.setattr(llm_mod, "get_llm", lambda: llm)
+    else:                      # 传入的是"一调用就抛"的函数
+        monkeypatch.setattr(llm_mod, "get_llm", llm)
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_breaker():
+    """每个用例前后都清空熔断状态（进程内单例，跨用例会互相污染）。"""
+    from app.services import llm as llm_mod
+
+    llm_mod.breaker.reset()
+    yield
+    llm_mod.breaker.reset()
+
+
 
 @pytest.fixture
 def no_rewrite_cache(monkeypatch):
@@ -160,7 +185,7 @@ async def test_rewrite_query_falls_back_to_memory_without_llm(monkeypatch, no_re
     async def _boom():
         raise RuntimeError("llm unavailable")
 
-    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_boom))
+    _patch_llm(monkeypatch, _FakeLLM(_boom))
     res = await rewrite_query("那什么时候能到？", _HISTORY, _MEMORY)
     assert res["applied"] is True
     assert res["method"] == "entity_memory"
@@ -171,7 +196,7 @@ async def test_rewrite_query_llm_path(monkeypatch, no_rewrite_cache):
     async def _ok():
         return _FakeMsg('{"rewritten": "订单 ORD20240100001 什么时候能到？", "used_context": true}')
 
-    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_ok))
+    _patch_llm(monkeypatch, _FakeLLM(_ok))
     res = await rewrite_query("那什么时候能到？", _HISTORY, _MEMORY)
     assert res["applied"] is True
     assert res["method"] == "llm"
@@ -194,7 +219,7 @@ async def test_rewrite_query_cache_hit_skips_llm(monkeypatch):
 
     monkeypatch.setattr(cache_module, "get_json", _hit)
     monkeypatch.setattr(cache_module, "set_json", _noop)
-    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_boom))
+    _patch_llm(monkeypatch, _FakeLLM(_boom))
     res = await rewrite_query("那什么时候能到？", _HISTORY, _MEMORY)
     assert res["cached"] is True
     assert res["applied"] is True
@@ -278,7 +303,7 @@ async def test_rewrite_guard_blocks_entity_injection_for_non_status_question(
             '{"rewritten": "订单 ORD20240100001 可以指定快递公司吗？", "used_context": true}'
         )
 
-    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_inject))
+    _patch_llm(monkeypatch, _FakeLLM(_inject))
     res = await rewrite_query("可以指定快递公司吗？", _HISTORY, _MEMORY)
     assert "ORD20240100001" not in res["rewritten"]
     assert "快递公司" in res["rewritten"]
@@ -442,7 +467,7 @@ async def test_classify_precise_without_entity_degrades_to_knowledge(monkeypatch
     async def _precise():
         return _FakeMsg('{"intent": "precise_query", "reason": "在问订单"}')
 
-    monkeypatch.setattr("app.services.intent.get_llm", lambda: _FakeLLM(_precise))
+    _patch_llm(monkeypatch, _FakeLLM(_precise))
     res = await classify("我的订单什么时候发货？")
     assert res["entities"] == {"order_ids": [], "tracking_nos": []}
     assert res["intent"] == "knowledge"
@@ -455,7 +480,7 @@ async def test_classify_precise_with_entity_short_circuits_before_llm(monkeypatc
     def _boom():
         raise AssertionError("带单号时不应调用 LLM 分类")
 
-    monkeypatch.setattr("app.services.intent.get_llm", _boom)
+    _patch_llm(monkeypatch, _boom)
     res = await classify("帮我看看 ORD20240100007 现在什么情况")
     assert res["intent"] == "precise_query"
     assert res["method"] == "regex"
@@ -497,7 +522,7 @@ async def test_rewrite_guard_strips_entity_for_policy_question(monkeypatch, no_r
             '{"rewritten": "订单 ORD20240100001 的退货运费由谁承担？", "used_context": true}'
         )
 
-    monkeypatch.setattr("app.services.query_rewrite.get_llm", lambda: _FakeLLM(_ok))
+    _patch_llm(monkeypatch, _FakeLLM(_ok))
     res = await rewrite_query("那退货运费谁出？", _HISTORY, _MEMORY)
     assert res["applied"] is True
     assert res["method"] == "llm+policy_guard"
@@ -831,3 +856,176 @@ async def test_create_ticket_persists(monkeypatch):
     assert ticket["status"] == "pending"
     assert ticket["source"] == "auto"
     assert "INSERT INTO handoff_tickets" in captured["sql"]
+
+
+# ---- 需求文档流程6：LLM 超时/不可用必须降级为固定话术（而不是 500） ----
+
+
+async def test_run_rag_degrades_when_llm_times_out(monkeypatch):
+    """LLM 生成超时 → 返回固定话术 + llm_failed 标记，绝不向外抛异常（否则接口会 500）。"""
+    from app.services.rag import pipeline
+
+    class _TimeoutLLM:
+        async def ainvoke(self, _messages):
+            raise TimeoutError("deepseek timeout")
+
+    _patch_llm(monkeypatch, _TimeoutLLM())
+    hits = [{"faq_id": 1, "question": "怎么退货？", "answer": "在订单页申请", "rerank_score": 0.9}]
+    res = await pipeline._generate("怎么退货？", hits, 0.9, {}, False, "fast", {})
+
+    assert res.llm_failed is True
+    assert res.degraded is True
+    assert res.answer == pipeline.LLM_UNAVAILABLE_ANSWER == "抱歉，系统繁忙，请稍后再试"
+    assert res.confidence == 0.0
+    assert res.sources == []          # 生成失败时不返回"答案依据"
+
+
+async def test_knowledge_route_returns_fallback_answer_when_llm_failed(monkeypatch):
+    """路由层：LLM 失败 → source=fallback + 固定话术，且**不写答案缓存**（避免污染 1h 缓存）。"""
+    from app.api.routes import chat as chat_route
+    from app.models.chat import ChatRequest
+    from app.services.rag.pipeline import RagResult
+
+    cached_writes = []
+
+    async def _no_cache(*_a, **_kw):
+        return None
+
+    async def _record_write(*a, **kw):
+        cached_writes.append((a, kw))
+
+    async def _llm_failed(*_a, **_kw):
+        return RagResult(
+            answer="抱歉，系统繁忙，请稍后再试",
+            confidence=0.0,
+            degraded=True,
+            llm_failed=True,
+            path="full",
+            sources=[{"faq_id": 1, "question": "q", "category": "", "score": 0.9}],
+        )
+
+    monkeypatch.setattr(chat_route.cache_svc, "get_cached_answer", _no_cache)
+    monkeypatch.setattr(chat_route.cache_svc, "set_cached_answer", _record_write)
+    monkeypatch.setattr(chat_route, "run_rag", _llm_failed)
+
+    data, detail = await chat_route._handle_knowledge(
+        ChatRequest(session_id="s1", question="怎么退货？", user_id="user_001"), [], "user_001"
+    )
+    assert data.source == "fallback"
+    assert data.answer == chat_route.LLM_UNAVAILABLE_ANSWER
+    assert data.confidence == 0.0
+    assert detail["path"] == "full"
+    assert cached_writes == []        # 失败结果不落缓存
+
+
+# ---- LLM 熔断（N8：依赖故障快速降级，不再等 SDK 重试几十秒） ----
+
+
+def test_circuit_breaker_opens_after_threshold_and_short_circuits():
+    from app.services.llm import LlmCircuitBreaker, LlmCircuitOpen
+
+    cb = LlmCircuitBreaker(threshold=3, cooldown=60.0)
+    assert cb.allow() is True
+    cb.record_failure()
+    cb.record_failure()
+    assert cb.allow() is True          # 未达阈值仍放行
+    cb.record_failure()
+    assert cb.allow() is False         # 达到阈值 → 打开
+    assert cb.is_open is True
+    assert isinstance(LlmCircuitOpen("x"), RuntimeError)
+
+
+def test_circuit_breaker_cooldown_allows_probe():
+    from app.services.llm import LlmCircuitBreaker
+    import time as _time
+
+    cb = LlmCircuitBreaker(threshold=1, cooldown=0.05)
+    cb.record_failure()
+    assert cb.allow() is False
+    _time.sleep(0.06)
+    assert cb.allow() is True          # 冷却结束 → 放行探测
+
+
+def test_circuit_breaker_success_resets():
+    from app.services.llm import LlmCircuitBreaker
+
+    cb = LlmCircuitBreaker(threshold=2, cooldown=60.0)
+    cb.record_failure()
+    cb.record_success()
+    assert cb.failures == 0
+    cb.record_failure()
+    assert cb.allow() is True          # 计数已清零，未达阈值
+
+
+def test_circuit_breaker_hard_failure_opens_immediately():
+    """超时/连接类异常单次即打开（这类失败每次都要等满 timeout，代价最高）。"""
+    from app.services.llm import LlmCircuitBreaker, _is_hard_failure
+
+    cb = LlmCircuitBreaker(threshold=5, cooldown=60.0)
+    cb.record_failure(hard=True)
+    assert cb.allow() is False
+
+    assert _is_hard_failure(TimeoutError("t")) is True
+    assert _is_hard_failure(ConnectionResetError("c")) is True
+
+    class APIConnectionError(Exception):
+        pass
+
+    assert _is_hard_failure(APIConnectionError("x")) is True
+    assert _is_hard_failure(ValueError("bad json")) is False
+
+
+async def test_ainvoke_skips_call_when_circuit_open(monkeypatch):
+    """熔断打开后必须**直接失败**，不再调用底层 LLM（否则仍要等 SDK 重试）。"""
+    from app.services import llm as llm_mod
+
+    calls = []
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            calls.append(messages)
+            raise TimeoutError("timeout")
+
+    monkeypatch.setattr(llm_mod, "get_llm", lambda: _LLM())
+    monkeypatch.setattr(llm_mod.breaker, "threshold", 1)
+    monkeypatch.setattr(llm_mod.breaker, "cooldown", 60.0)
+    llm_mod.breaker.reset()
+
+    import pytest as _pytest
+
+    with _pytest.raises(TimeoutError):
+        await llm_mod.ainvoke([], stage="test")
+    assert len(calls) == 1
+    assert llm_mod.breaker.is_open is True
+
+    with _pytest.raises(llm_mod.LlmCircuitOpen):
+        await llm_mod.ainvoke([], stage="test")
+    assert len(calls) == 1             # 短路：底层未被再次调用
+    llm_mod.breaker.reset()
+
+
+async def test_ready_reports_circuit_open(monkeypatch):
+    """运维可见性：熔断打开时 /ready 的 llm 组件应显示 circuit_open。"""
+    from app.api.routes import health as health_route
+    from app.services import llm as llm_mod
+    from app.db import milvus, postgres, redis
+
+    async def _up():
+        return True
+
+    monkeypatch.setattr(health_route.postgres, "ping", _up)
+    monkeypatch.setattr(health_route.redis, "ping", _up)
+    monkeypatch.setattr(health_route.milvus, "ping", _up)
+    monkeypatch.setattr(llm_mod.breaker, "threshold", 1)
+    monkeypatch.setattr(llm_mod.breaker, "cooldown", 60.0)
+    llm_mod.breaker.reset()
+
+    body = await health_route.ready()
+    assert body["components"]["llm"] in ("ready", "not_configured")
+
+    llm_mod.breaker.record_failure(hard=True)
+    body = await health_route.ready()
+    assert body["components"]["llm"] == "circuit_open"
+    llm_mod.breaker.reset()
+
+

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout: float = 30.0
     llm_max_tokens: int = 1024
+    llm_max_retries: int = 1                  # SDK 层重试次数
+    llm_circuit_threshold: int = 3            # 连续失败多少次后打开熔断（N8：故障快速降级）
+    llm_circuit_cooldown: float = 30.0        # 熔断冷却秒数，期间 LLM 调用毫秒级失败
 
     # ---- 本地嵌入 / 重排模型 ----
     embedding_model: str = "BAAI/bge-small-zh-v1.5"

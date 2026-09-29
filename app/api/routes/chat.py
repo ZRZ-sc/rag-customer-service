@@ -28,7 +28,11 @@ from app.services import rate_limit
 from app.services import support as support_svc
 from app.services.intent import classify
 from app.services.query_rewrite import is_standalone, rewrite_query
-from app.services.rag.pipeline import LOW_CONFIDENCE_ANSWER, run_rag
+from app.services.rag.pipeline import (
+    LLM_UNAVAILABLE_ANSWER,
+    LOW_CONFIDENCE_ANSWER,
+    run_rag,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -248,6 +252,19 @@ async def _handle_knowledge(
         "cache": res.cache,
         "path": res.path,
     }
+    if res.llm_failed:
+        # 需求文档流程6：LLM 超时/不可用 → 固定话术 + 自动转人工（由 chat() 统一建单），且不缓存
+        logger.warning("llm unavailable, returning fallback answer (handoff will be created)")
+        return (
+            ChatData(
+                answer=LLM_UNAVAILABLE_ANSWER,
+                source="fallback",
+                confidence=0.0,
+                session_id=req.session_id,
+                latency_ms=0,
+            ),
+            detail,
+        )
     if res.confidence < settings.confidence_threshold:
         # 低置信度：不缓存，直接兜底话术（转人工入口由前端/后续扩展承接）
         return (

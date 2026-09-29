@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.config import settings
 from app.core.logging import logger
 from app.services import cache as cache_svc
-from app.services.llm import get_llm
+from app.services.llm import ainvoke as llm_ainvoke
 
 _MERGED_PROMPT = """你是检索增强助手。请为下面的用户问题同时产出两类检索辅助内容：
 
@@ -62,11 +62,12 @@ async def transform_queries(
     queries: list[str] = [question]
     hyde_text = ""
     try:
-        resp = await get_llm().ainvoke(
+        resp = await llm_ainvoke(
             [
                 SystemMessage(content=_MERGED_PROMPT.format(n=n, question=question)),
                 HumanMessage(content=question),
-            ]
+            ],
+            stage="transform",
         )
         data = _parse(resp.content)
         for q in data.get("queries", []) or []:

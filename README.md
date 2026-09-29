@@ -360,20 +360,32 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 
 | 故障点 | 降级行为 |
 |---|---|
-| LLM 不可用 | 503 + "抱歉，系统繁忙，请稍后再试" |
+| LLM 不可用（未配置 Key） | 503 + "抱歉，系统繁忙，请稍后再试" |
+| LLM 超时/连接失败 | **固定话术「抱歉，系统繁忙，请稍后再试」+ 自动转人工**（HTTP 200，`source=fallback`，不写缓存）；连续失败触发**熔断**，冷却期内直接短路（实测：首次失败请求 61s → 后续请求 0.2-0.6s） |
 | Milvus 故障 | 降级为 PostgreSQL ILIKE 全文检索 |
 | Redis 故障 | 跳过缓存/会话，直连 PG + 完整 RAG |
 | PostgreSQL 故障 | 500 + 错误日志与告警 |
 | 判为精确查询但问题里没有单号 | 降级走 FAQ 检索（"我的订单什么时候发货？"这类问题由知识库回答，而非报 400） |
+| 意图识别 LLM 失败 | 默认按知识类走 FAQ |
+| 上下文改写 LLM 失败 | 用会话实体记忆兜底补全；再失败则用原问题 |
+| 查询扩展（Multi-Query/HyDE）失败 | 退化为只用原问题检索 |
+
+> LLM 熔断开关：`LLM_CIRCUIT_THRESHOLD`（默认连续 3 次失败打开；**超时/连接类异常一次即打开**）、
+> `LLM_CIRCUIT_COOLDOWN`（默认 30s，到期放行一次探测请求）。
+> 首次失败请求仍受 SDK 超时+重试影响（≈2×`LLM_TIMEOUT`），如需更快可下调 `LLM_TIMEOUT` / `LLM_MAX_RETRIES`。
+> 指标：`llm_failure_total{stage}`（含 `:circuit_open` 短路计数），告警规则见 `monitoring/prometheus/alert-rules.yml`。
 
 ## 验证测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest                      # 单元测试（87 个）
+.\.venv\Scripts\python.exe -m pytest                      # 单元测试（95 个）
 .\.venv\Scripts\python.exe -m scripts.eval_accuracy       # 端到端准确率评测（79 条 / 91 轮次）
 .\.venv\Scripts\python.exe -m scripts.latency_test        # 延迟测试（冷启动/缓存命中对比）
 .\.venv\Scripts\python.exe -m scripts.traffic_demo        # 流量演示（点亮监控面板）
 ```
+
+> 需求设计文档逐条对照的实现差距审计见 **`docs/gap_audit.md`**（功能项全部落地；N2 延迟与 LangSmith 追踪
+> 受本机无 GPU / 网络不可达限制，已给出替代方案与达标路径）。
 
 ## 性能现状（本机：i7-12650H CPU / 16GB，无 GPU）
 
@@ -412,4 +424,6 @@ $env:LT_BASE="http://127.0.0.1:8001"; $env:LT_PROFILE="cache"; $env:LT_STAGES="5
 - [x] 阶段6：评测集与准确率量化（N4：意图 100% / 答案 100%）+ 压测（N1/N5）+ 缓存预热脚本
 - [x] 阶段7：F7 管理后台只读 API + F1 极简 Web 聊天界面（+ 日志结构化与脱敏）
 - [x] 阶段8：Docker Compose 全栈一键部署（app/nginx 容器化 + 合并 compose）+ 生产扩展方案文档
-- [ ] 阶段9（待定）：LangSmith 链路追踪（当前网络不可达，已用 Prometheus + request_id 串联替代）、管理后台写操作（工单认领/关闭）、多副本运行时验证
+- [x] 阶段9：需求文档差距审计（`docs/gap_audit.md`）+ LLM 不可用降级（固定话术 + 自动转人工 + **熔断**）
+- [ ] 阶段10（待定）：LangSmith 链路追踪（网络可达后填 Key 即可）、Nginx 443/TLS、多副本运行时验证、
+      管理后台写操作（工单认领/关闭）、方案书中的多模态与流式输出（超出需求文档范围）

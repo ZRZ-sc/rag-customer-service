@@ -6,7 +6,7 @@ import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.services.llm import get_llm
+from app.services.llm import ainvoke as llm_ainvoke
 
 # 与 scripts/init_db.py 种子数据格式保持一致
 ORDER_ID_RE = re.compile(r"(?<![A-Za-z0-9])(ORD\d{8,20})(?![A-Za-z0-9])", re.IGNORECASE)
@@ -93,8 +93,9 @@ async def _classify_with_llm(question: str, history: list[dict]) -> str:
     hist_text = "\n".join(f"{t['role']}: {t['content']}" for t in history[-4:])
     prompt = f"{few_shot}\n历史对话：\n{hist_text}\n当前问题：{question}"
     try:
-        resp = await get_llm().ainvoke(
-            [SystemMessage(content=_INTENT_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+        resp = await llm_ainvoke(
+            [SystemMessage(content=_INTENT_SYSTEM_PROMPT), HumanMessage(content=prompt)],
+            stage="intent",
         )
         text = resp.content.strip().strip("`")
         if text.startswith("json"):

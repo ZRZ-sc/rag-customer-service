@@ -30,7 +30,7 @@ from app.services.intent import (
     has_knowledge_marker,
     has_status_intent,
 )
-from app.services.llm import get_llm
+from app.services.llm import ainvoke as llm_ainvoke
 
 # 指代/省略标记：句首"那"、"它"、"这个/那个"、"该订单"、"上面/刚才"、"还有/另外"等
 _PRONOUN_RE = re.compile(
@@ -246,11 +246,12 @@ async def rewrite_query(
             f"{'用户' if t.get('role') == 'user' else '客服'}：{t.get('content', '')}"
             for t in history[-6:]
         )
-        resp = await get_llm().ainvoke(
+        resp = await llm_ainvoke(
             [
                 SystemMessage(content=_REWRITE_SYSTEM_PROMPT),
                 HumanMessage(content=f"对话历史：\n{hist_text}\n\n当前问题：{question}"),
-            ]
+            ],
+            stage="rewrite",
         )
         rewritten = _parse_rewrite(resp.content)
         if rewritten:

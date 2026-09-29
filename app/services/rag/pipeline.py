@@ -27,12 +27,15 @@ from app.core.metrics import (
     tokens_consumed_total,
 )
 from app.services import cache as cache_svc
-from app.services.llm import extract_usage, get_llm
+from app.services.llm import ainvoke as llm_ainvoke
+from app.services.llm import extract_usage
 from app.services.rag.query_transform import transform_queries
 from app.services.rag.reranker import reranker
 from app.services.rag.retriever import HybridRetriever, hybrid_retriever
 
 LOW_CONFIDENCE_ANSWER = "抱歉，我暂时无法确定答案，请稍后咨询人工客服。"
+# 需求文档流程6：LLM 服务超时/不可用时的固定话术（由路由层决定是否同时转人工）
+LLM_UNAVAILABLE_ANSWER = "抱歉，系统繁忙，请稍后再试"
 
 _SYSTEM_PROMPT = """你是"优选商城"的智能客服助手。请严格基于提供的【知识库上下文】回答用户问题。
 
@@ -54,6 +57,7 @@ class RagResult:
     sources: list[dict] = field(default_factory=list)
     stage_ms: dict = field(default_factory=dict)
     degraded: bool = False
+    llm_failed: bool = False                 # LLM 超时/不可用（→ 固定话术 + 转人工，不缓存）
     path: str = "full"                       # fast | full | fallback
     cache: dict = field(default_factory=dict)  # {"transform": hit|miss|skipped, "rerank": hit|miss}
 
@@ -225,13 +229,27 @@ async def _generate(
     context = "\n\n".join(
         f"[{i+1}] Q: {c['question']}\nA: {c['answer']}" for i, c in enumerate(ranked)
     )
-    llm = get_llm()
-    resp = await llm.ainvoke(
-        [
-            SystemMessage(content=_SYSTEM_PROMPT.format(context=context)),
-            HumanMessage(content=f"用户问题：{question}"),
-        ]
-    )
+    try:
+        resp = await llm_ainvoke(
+            [
+                SystemMessage(content=_SYSTEM_PROMPT.format(context=context)),
+                HumanMessage(content=f"用户问题：{question}"),
+            ],
+            stage="generate",
+        )
+    except Exception as exc:
+        # 需求文档流程6：LLM 超时/不可用 → 固定话术（路由层据此自动转人工），绝不落缓存
+        stage["llm_ms"] = (time.perf_counter() - t) * 1000
+        logger.warning("llm generation failed, degraded to fallback answer: {}", exc)
+        return RagResult(
+            answer=LLM_UNAVAILABLE_ANSWER,
+            confidence=0.0,
+            stage_ms=stage,
+            degraded=True,
+            llm_failed=True,
+            path=path,
+            cache=cache_flags or {},
+        )
     usage = extract_usage(resp)
     stage["llm_ms"] = (time.perf_counter() - t) * 1000
     llm_generation_duration.observe(stage["llm_ms"] / 1000.0)

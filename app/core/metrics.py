@@ -59,6 +59,11 @@ rag_fast_path_total = Counter(
     "rag_fast_path_total", "RAG 快速路径命中次数", ["result"]
 )
 
+# ---- LLM 生成失败降级（需求文档流程6：超时/不可用 → 固定话术 + 转人工） ----
+llm_failure_total = Counter(
+    "llm_failure_total", "LLM 生成失败次数（已降级为兜底话术）", ["stage"]
+)
+
 # ---- 限流（429） ----
 rate_limited_total = Counter(
     "rate_limited_total", "触发限流的请求数", ["scope"]
